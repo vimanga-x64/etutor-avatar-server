@@ -268,15 +268,15 @@
                 // Camera - positioned for head and shoulders portrait view
                 // CHANGED: FOV from 70 to 50 for a portrait zoom
                 camera = new THREE.PerspectiveCamera(
-                    50,
+                    60,
                     window.innerWidth / window.innerHeight,
                     0.1,
                     1000
                 );
                 // CHANGED: Moved camera closer (z: 1.8) for a larger view
-                camera.position.set(0, 1.6, 1.8);
+                camera.position.set(0, 1.6, 2.2);
                 // CHANGED: Look at face-level (y: 1.6)
-                camera.lookAt(0, 1.6, 0);
+                camera.lookAt(0, 1.0, 0);
                 
                 // Renderer
                 renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
