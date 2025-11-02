@@ -116,18 +116,18 @@
         /* Control Panel (CHANGED: Repositioned to the side) */
         #control-panel {
             position: absolute;
-            right: 20px; /* Positioned on the right */
+            right: 15px; /* Positioned on the right */
             top: 50%; /* Centered vertically */
             transform: translateY(-50%); /* Adjust for vertical centering */
             display: flex;
             flex-direction: column; /* Stack buttons vertically */
-            gap: 15px; /* Increased gap slightly */
+            gap: 12px; /* Increased gap slightly */
             z-index: 5;
         }
 
         .control-btn {
-            width: 50px;
-            height: 50px;
+            width: 45px;
+            height: 45px;
             border: none;
             border-radius: 50%;
             background: rgba(255, 255, 255, 0.8); /* Slightly transparent */
@@ -137,7 +137,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 24px;
+            font-size: 20px;
             transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
 
@@ -149,9 +149,9 @@
         .control-btn.primary {
             background: #667eea;
             color: white;
-            width: 60px;
-            height: 60px;
-            font-size: 28px;
+            width: 55px;
+            height: 55px;
+            font-size: 24px;
         }
 
         /* Hidden video for lip sync */
@@ -276,7 +276,7 @@
                 // CHANGED: Moved camera closer (z: 1.8) for a larger view
                 camera.position.set(0, 1.6, 2.2);
                 // CHANGED: Look at face-level (y: 1.6)
-                camera.lookAt(0, 1.0, 0);
+                camera.lookAt(0, 1.5, 0);
                 
                 // Renderer
                 renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -324,7 +324,11 @@
                         avatar.scale.set(scaleFactor, scaleFactor, scaleFactor);
                         
                         // Position avatar at ground level (Y=0), centered
-                        avatar.position.set(-center.x * scaleFactor, -box.min.y * scaleFactor, -center.z * scaleFactor);
+                        avatar.position.set(
+                            -center.x * scaleFactor,
+                            -center.y * scaleFactor + 1.5,
+                            -center.z * scaleFactor
+                            );
                         
                         console.log('🔧 Scale factor:', scaleFactor);
                         console.log('🔧 New position:', avatar.position);
