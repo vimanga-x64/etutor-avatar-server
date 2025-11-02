@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>E-Tutor Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+            position: fixed;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* Avatar Container */
+        #avatar-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+        }
+
+        /* Loading State */
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            color: white;
+            z-index: 10;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            margin: 0 auto 20px;
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Speech Bubble */
+        #speech-bubble {
+            position: absolute;
+            bottom: 100px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 90%;
+            padding: 15px 20px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            z-index: 5;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+
+        #speech-bubble.active {
+            opacity: 1;
+        }
+
+        #speech-bubble::after {
+            content: '';
+            position: absolute;
+            bottom: -10px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 10px solid transparent;
+            border-right: 10px solid transparent;
+            border-top: 10px solid white;
+        }
+
+        /* Status Badge */
+        #status-badge {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 8px 16px;
+            background: rgba(255,255,255,0.9);
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #667eea;
+            z-index: 5;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        #status-badge.speaking {
+            background: #4CAF50;
+            color: white;
+        }
+
+        /* Control Panel (Hidden by default) */
+        #control-panel {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+            z-index: 5;
+        }
+
+        .control-btn {
+            width: 50px;
+            height: 50px;
+            border: none;
+            border-radius: 50%;
+            background: white;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        .control-btn:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+
+        .control-btn.primary {
+            background: #667eea;
+            color: white;
+            width: 60px;
+            height: 60px;
+            font-size: 28px;
+        }
+
+        /* Hidden video for lip sync */
+        #avatar-video {
+            display: none;
+        }
+
+        /* Expression indicator */
+        #expression-indicator {
+            position: absolute;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 6px 12px;
+            background: rgba(255,255,255,0.8);
+            border-radius: 15px;
+            font-size: 12px;
+            color: #667eea;
+            z-index: 5;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        #expression-indicator.active {
+            opacity: 1;
+        }
+
+        /* Error message */
+        #error-message {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            max-width: 90%;
+            padding: 12px 20px;
+            background: #f44336;
+            color: white;
+            border-radius: 10px;
+            font-size: 14px;
+            z-index: 10;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading State -->
+    <div id="loading">
+        <div class="spinner"></div>
+        <p style="font-size: 18px; font-weight: 500;">Loading E-Tutor Assistant...</p>
+        <p style="font-size: 14px; margin-top: 10px; opacity: 0.8;">Powered by Cloud AI</p>
+    </div>
+
+    <!-- Avatar Canvas -->
+    <div id="avatar-canvas"></div>
+
+    <!-- Status Badge -->
+    <div id="status-badge">Ready to help</div>
+
+    <!-- Expression Indicator -->
+    <div id="expression-indicator">😊 Neutral</div>
+
+    <!-- Speech Bubble -->
+    <div id="speech-bubble">
+        Hello! I'm your E-Tutor assistant. How can I help you today?
+    </div>
+
+    <!-- Control Panel -->
+    <div id="control-panel">
+        <button class="control-btn" onclick="toggleMute()" title="Mute/Unmute">
+            🔊
+        </button>
+        <button class="control-btn primary" onclick="startListening()" title="Ask a question">
+            🎤
+        </button>
+        <button class="control-btn" onclick="showMenu()" title="Menu">
+            ⚙️
+        </button>
+    </div>
+
+    <!-- Error Message -->
+    <div id="error-message"></div>
+
+    <!-- Hidden video for avatar -->
+    <video id="avatar-video" autoplay muted loop></video>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        
+        // Mobile E-Learning Avatar Controller
+        let isLoading = true;
+        let isSpeaking = false;
+        let currentExpression = 'neutral';
+        let isMuted = false;
+        
+        // Three.js variables
+        let scene, camera, renderer, avatar, mixer, clock;
+        let animations = {};
+
+        // Initialize when DOM is loaded
+        window.addEventListener('load', () => {
+            initializeAvatar();
+        });
+
+        async function initializeAvatar() {
+            try {
+                console.log('🎬 Initializing 3D Avatar...');
+                
+                // Setup Three.js scene
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x667eea);
+                
+                // Camera - positioned for head and shoulders portrait view
+                camera = new THREE.PerspectiveCamera(
+                    70,  // Wider FOV to fit more in frame
+                    window.innerWidth / window.innerHeight,
+                    0.1,
+                    1000
+                );
+                camera.position.set(0, 1.6, 2.5); // Pull back and lower slightly
+                camera.lookAt(0, 1.45, 0); // Look at upper chest level
+                
+                // Renderer
+                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                renderer.setSize(window.innerWidth, window.innerHeight);
+                renderer.setPixelRatio(window.devicePixelRatio);
+                renderer.shadowMap.enabled = true;
+                
+                const container = document.getElementById('avatar-canvas');
+                container.appendChild(renderer.domElement);
+                
+                // Lighting
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                scene.add(ambientLight);
+                
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(2, 4, 3);
+                directionalLight.castShadow = true;
+                scene.add(directionalLight);
+                
+                const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+                fillLight.position.set(-2, 2, -2);
+                scene.add(fillLight);
+                
+                // Load avatar model
+                console.log('📦 Loading avatar model...');
+                const loader = new GLTFLoader();
+                
+                loader.load(
+                    '/models/avatar_female.glb',
+                    (gltf) => {
+                        console.log('✅ Avatar model loaded successfully');
+                        avatar = gltf.scene;
+                        
+                        // Calculate bounding box for proper positioning
+                        const box = new THREE.Box3().setFromObject(avatar);
+                        const size = box.getSize(new THREE.Vector3());
+                        const center = box.getCenter(new THREE.Vector3());
+                        
+                        console.log('📏 Avatar size:', size);
+                        console.log('📍 Avatar center:', center);
+                        
+                        // Scale down the avatar dramatically (it's 400 units tall, we want ~1.7)
+                        const targetHeight = 1.7; // Average human height in meters
+                        const scaleFactor = targetHeight / size.y;
+                        avatar.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                        
+                        // Position avatar at ground level (Y=0), centered
+                        avatar.position.set(-center.x * scaleFactor, -box.min.y * scaleFactor, -center.z * scaleFactor);
+                        
+                        console.log('🔧 Scale factor:', scaleFactor);
+                        console.log('🔧 New position:', avatar.position);
+                        
+                        // Fix transparency issues on materials
+                        avatar.traverse((node) => {
+                            if (node.isMesh) {
+                                // Fix alpha rendering issues
+                                if (node.material) {
+                                    if (Array.isArray(node.material)) {
+                                        node.material.forEach(mat => {
+                                            mat.alphaTest = 0.5; // Discard transparent pixels below 0.5
+                                            mat.transparent = true;
+                                            mat.depthWrite = true;
+                                        });
+                                    } else {
+                                        node.material.alphaTest = 0.5;
+                                        node.material.transparent = true;
+                                        node.material.depthWrite = true;
+                                    }
+                                }
+                            }
+                        });
+                        
+                        scene.add(avatar);
+                        
+                        // Setup animations
+                        if (gltf.animations && gltf.animations.length > 0) {
+                            mixer = new THREE.AnimationMixer(avatar);
+                            gltf.animations.forEach((clip) => {
+                                animations[clip.name] = mixer.clipAction(clip);
+                            });
+                            console.log('🎭 Animations loaded:', Object.keys(animations));
+                        }
+                        
+                        // Hide loading
+                        document.getElementById('loading').style.display = 'none';
+                        
+                        // Start render loop
+                        clock = new THREE.Clock();
+                        animate();
+                        
+                        // Show welcome message
+                        setTimeout(() => {
+                            showSpeechBubble('Hello! I\'m your E-Tutor assistant. How can I help you today?', 3000);
+                        }, 500);
+                        
+                        // Notify Flutter that we're ready
+                        sendToFlutter({ type: 'ready', timestamp: Date.now() });
+                    },
+                    (progress) => {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        console.log(`📥 Loading: ${percent}%`);
+                    },
+                    (error) => {
+                        console.error('❌ Error loading avatar:', error);
+                        showError('Failed to load avatar model. Please check the connection.');
+                    }
+                );
+                
+                // Handle window resize
+                window.addEventListener('resize', onWindowResize, false);
+                
+            } catch (error) {
+                console.error('❌ Avatar initialization error:', error);
+                showError('Failed to initialize avatar: ' + error.message);
+            }
+        }
+        
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            if (mixer && clock) {
+                const delta = clock.getDelta();
+                mixer.update(delta);
+            }
+            
+            // Removed idle rotation - avatar stays still
+            
+            renderer.render(scene, camera);
+        }
+        
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Speech bubble functions
+        function showSpeechBubble(text, duration = 5000) {
+            const bubble = document.getElementById('speech-bubble');
+            bubble.textContent = text;
+            bubble.classList.add('active');
+            
+            if (duration > 0) {
+                setTimeout(() => {
+                    bubble.classList.remove('active');
+                }, duration);
+            }
+        }
+
+        function hideSpeechBubble() {
+            document.getElementById('speech-bubble').classList.remove('active');
+        }
+
+        // Status functions
+        function setStatus(text, isSpeaking = false) {
+            const badge = document.getElementById('status-badge');
+            badge.textContent = text;
+            if (isSpeaking) {
+                badge.classList.add('speaking');
+            } else {
+                badge.classList.remove('speaking');
+            }
+        }
+
+        // Expression functions
+        function showExpression(name, emoji) {
+            const indicator = document.getElementById('expression-indicator');
+            indicator.textContent = `${emoji} ${name}`;
+            indicator.classList.add('active');
+            setTimeout(() => {
+                indicator.classList.remove('active');
+            }, 2000);
+        }
+
+        // Control functions
+        function toggleMute() {
+            isMuted = !isMuted;
+            const btn = event.target;
+            btn.textContent = isMuted ? '🔇' : '🔊';
+            sendToFlutter({ type: 'mute', muted: isMuted });
+        }
+
+        function startListening() {
+            setStatus('Listening...', true);
+            sendToFlutter({ type: 'listen' });
+        }
+
+        function showMenu() {
+            sendToFlutter({ type: 'menu' });
+        }
+
+        // Error handling
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+
+        // Communication with Flutter
+        function sendToFlutter(data) {
+            if (window.Flutter) {
+                window.Flutter.postMessage(JSON.stringify(data));
+            }
+            console.log('📱 To Flutter:', data);
+        }
+
+        // API for Flutter to call
+        window.tutorSpeak = function(text, expression = 'neutral') {
+            console.log('🗣️ Speaking:', text, 'Expression:', expression);
+            
+            isSpeaking = true;
+            setStatus('Speaking', true);
+            showSpeechBubble(text);
+            
+            // Change expression
+            if (expression !== 'neutral') {
+                const emojiMap = {
+                    'smile': '😊',
+                    'happy': '😄',
+                    'sad': '😢',
+                    'thinking': '🤔',
+                    'excited': '🤗',
+                    'surprised': '😮'
+                };
+                showExpression(expression, emojiMap[expression] || '😊');
+                
+                // Call avatar controller if available
+                if (window.changeExpression) {
+                    window.changeExpression(expression);
+                }
+            }
+            
+            // Simulate speech duration
+            const duration = text.length * 50; // 50ms per character
+            setTimeout(() => {
+                isSpeaking = false;
+                setStatus('Ready to help');
+                hideSpeechBubble();
+                sendToFlutter({ type: 'speechComplete' });
+            }, duration);
+        };
+
+        window.tutorSetExpression = function(expression) {
+            console.log('😊 Expression:', expression);
+            currentExpression = expression;
+            if (window.changeExpression) {
+                window.changeExpression(expression);
+            }
+        };
+
+        window.tutorAsk = function(question) {
+            console.log('❓ Question:', question);
+            showSpeechBubble('Thinking...', 1000);
+            setStatus('Processing');
+            
+            // Process question (would connect to your backend/AI)
+            setTimeout(() => {
+                const answer = `Great question! Let me explain...`;
+                window.tutorSpeak(answer, 'smile');
+            }, 1500);
+        };
+
+        // Expose control functions to window for onclick handlers
+        window.toggleMute = toggleMute;
+        window.startListening = startListening;
+        window.showMenu = showMenu;
+
+        // Expose API
+        window.eTutorAPI = {
+            speak: window.tutorSpeak,
+            setExpression: window.tutorSetExpression,
+            ask: window.tutorAsk,
+            setStatus: setStatus,
+            showMessage: showSpeechBubble,
+            showError: showError
+        };
+
+        console.log('✅ E-Tutor Assistant Mobile Interface Ready');
+        console.log('📱 API available at window.eTutorAPI');
+    </script>
+</body>
+</html>

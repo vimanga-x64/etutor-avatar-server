@@ -1,0 +1,17 @@
+# Render.com Deployment Configuration
+# This file tells Render how to build and run your server
+
+# Build Command (run once during deployment)
+buildCommand: npm install
+
+# Start Command (run to start your server)
+startCommand: npm start
+
+# Environment
+runtime: node
+
+# Health Check (Render pings this to verify server is running)
+healthCheckPath: /health
+
+# Auto-deploy on git push
+autoDeploy: true
