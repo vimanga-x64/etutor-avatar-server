@@ -199,12 +199,11 @@
         let scene, camera, renderer, avatar, mixer, clock;
         let animations = {};
         
-        // Expression system variables
-        let avatarMesh = null;
+        // Expression system variables - support MULTIPLE meshes with morph targets
+        let avatarMeshes = []; // Array of all meshes with morph targets
         let expressionIndices = {};
         let targetInfluences = {};
-        let currentInfluences = {};
-        const MORPH_SPEED = 0.15; // Speed of expression transitions
+        const MORPH_SPEED = 0.2; // Speed of expression transitions (increased for visibility)
 
         // Initialize when DOM is loaded
         window.addEventListener('load', () => {
@@ -306,23 +305,25 @@
                                     }
                                 }
                                 
-                                // Setup expression morph targets
+                                // Setup expression morph targets - collect ALL meshes
                                 if (node.morphTargetDictionary && node.morphTargetInfluences) {
-                                    avatarMesh = node;
+                                    avatarMeshes.push(node);
                                     const morphNames = Object.keys(node.morphTargetDictionary);
-                                    console.log('🎭 Found morph targets (' + morphNames.length + '):', morphNames);
-                                    console.log('🎭 Full morph dictionary:', JSON.stringify(node.morphTargetDictionary));
+                                    console.log('🎭 Found mesh "' + node.name + '" with morph targets (' + morphNames.length + '):', morphNames);
                                     
                                     // Map ALL available morph targets for expressions
                                     morphNames.forEach(name => {
-                                        expressionIndices[name] = node.morphTargetDictionary[name];
-                                        targetInfluences[node.morphTargetDictionary[name]] = 0;
-                                        currentInfluences[node.morphTargetDictionary[name]] = 0;
+                                        if (expressionIndices[name] === undefined) {
+                                            expressionIndices[name] = node.morphTargetDictionary[name];
+                                            targetInfluences[name] = 0;
+                                        }
                                     });
-                                    console.log('✅ Expression indices mapped:', JSON.stringify(expressionIndices));
                                 }
                             }
                         });
+                        
+                        console.log('✅ Total meshes with morph targets:', avatarMeshes.length);
+                        console.log('✅ Expression indices mapped:', JSON.stringify(expressionIndices));
                         
                         scene.add(avatar);
                         
@@ -377,18 +378,22 @@
                 mixer.update(delta);
             }
             
-            // Smooth expression morphing
-            if (avatarMesh && avatarMesh.morphTargetInfluences) {
-                Object.keys(targetInfluences).forEach(index => {
-                    const idx = parseInt(index);
-                    const target = targetInfluences[idx];
-                    const current = avatarMesh.morphTargetInfluences[idx] || 0;
-                    
-                    if (Math.abs(target - current) > 0.001) {
-                        avatarMesh.morphTargetInfluences[idx] = current + (target - current) * MORPH_SPEED;
-                    }
-                });
-            }
+            // Smooth expression morphing - apply to ALL meshes with morph targets
+            avatarMeshes.forEach(mesh => {
+                if (mesh && mesh.morphTargetInfluences && mesh.morphTargetDictionary) {
+                    Object.keys(targetInfluences).forEach(expressionName => {
+                        const idx = mesh.morphTargetDictionary[expressionName];
+                        if (idx !== undefined) {
+                            const target = targetInfluences[expressionName];
+                            const current = mesh.morphTargetInfluences[idx] || 0;
+                            
+                            if (Math.abs(target - current) > 0.001) {
+                                mesh.morphTargetInfluences[idx] = current + (target - current) * MORPH_SPEED;
+                            }
+                        }
+                    });
+                }
+            });
             
             renderer.render(scene, camera);
         }
@@ -397,33 +402,25 @@
         function morphToExpression(expressionName) {
             console.log(`🎭 morphToExpression called with: "${expressionName}"`);
             console.log(`🎭 Available expressions:`, Object.keys(expressionIndices));
+            console.log(`🎭 Number of avatar meshes:`, avatarMeshes.length);
             
-            if (!avatarMesh) {
-                console.warn('⚠️ Avatar mesh not ready yet');
+            if (avatarMeshes.length === 0) {
+                console.warn('⚠️ No avatar meshes with morph targets found');
                 return;
             }
-            
-            if (!avatarMesh.morphTargetInfluences) {
-                console.warn('⚠️ Avatar has no morphTargetInfluences array');
-                return;
-            }
-            
-            console.log(`🎭 Current influences count: ${avatarMesh.morphTargetInfluences.length}`);
             
             // Reset all expression influences to 0
-            Object.entries(expressionIndices).forEach(([name, idx]) => {
-                targetInfluences[idx] = 0;
+            Object.keys(targetInfluences).forEach(name => {
+                targetInfluences[name] = 0;
             });
             
             // Handle different expression name formats (case insensitive)
             const normalizedName = expressionName.toLowerCase().trim();
             
             // Find matching expression (case insensitive)
-            let matchedIndex = null;
             let matchedName = null;
-            for (const [name, idx] of Object.entries(expressionIndices)) {
+            for (const name of Object.keys(expressionIndices)) {
                 if (name.toLowerCase() === normalizedName) {
-                    matchedIndex = idx;
                     matchedName = name;
                     break;
                 }
@@ -431,9 +428,22 @@
             
             if (normalizedName === 'normal' || normalizedName === 'neutral') {
                 console.log('✅ Reset to normal/neutral expression (all targets at 0)');
-            } else if (matchedIndex !== null) {
-                targetInfluences[matchedIndex] = 1.0;
-                console.log(`✅ Set "${matchedName}" (index ${matchedIndex}) to 1.0`);
+                // Also try to set 'normal' if it exists
+                if (expressionIndices['normal'] !== undefined) {
+                    targetInfluences['normal'] = 0;
+                }
+            } else if (matchedName !== null) {
+                targetInfluences[matchedName] = 1.0;
+                console.log(`✅ Set "${matchedName}" to 1.0`);
+                
+                // IMMEDIATE application for debugging - force set on all meshes
+                avatarMeshes.forEach((mesh, i) => {
+                    if (mesh.morphTargetDictionary && mesh.morphTargetDictionary[matchedName] !== undefined) {
+                        const idx = mesh.morphTargetDictionary[matchedName];
+                        mesh.morphTargetInfluences[idx] = 1.0;
+                        console.log(`✅ Direct set on mesh ${i}: ${matchedName} (idx ${idx}) = 1.0`);
+                    }
+                });
             } else {
                 console.warn(`⚠️ Expression "${expressionName}" not found. Available:`, Object.keys(expressionIndices));
             }
