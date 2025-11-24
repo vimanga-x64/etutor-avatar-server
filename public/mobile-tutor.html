@@ -309,18 +309,17 @@
                                 // Setup expression morph targets
                                 if (node.morphTargetDictionary && node.morphTargetInfluences) {
                                     avatarMesh = node;
-                                    console.log('🎭 Found morph targets:', Object.keys(node.morphTargetDictionary));
+                                    const morphNames = Object.keys(node.morphTargetDictionary);
+                                    console.log('🎭 Found morph targets (' + morphNames.length + '):', morphNames);
+                                    console.log('🎭 Full morph dictionary:', JSON.stringify(node.morphTargetDictionary));
                                     
-                                    // Map expression names to morph target indices
-                                    const expressionNames = ['normal', 'smile', 'laugh', 'sad', 'anger', 'surprise', 'frown', 'closed_smile', 'funny_smile', 'depress', 'disgust', 'fear'];
-                                    expressionNames.forEach(name => {
-                                        if (node.morphTargetDictionary[name] !== undefined) {
-                                            expressionIndices[name] = node.morphTargetDictionary[name];
-                                            targetInfluences[node.morphTargetDictionary[name]] = 0;
-                                            currentInfluences[node.morphTargetDictionary[name]] = 0;
-                                        }
+                                    // Map ALL available morph targets for expressions
+                                    morphNames.forEach(name => {
+                                        expressionIndices[name] = node.morphTargetDictionary[name];
+                                        targetInfluences[node.morphTargetDictionary[name]] = 0;
+                                        currentInfluences[node.morphTargetDictionary[name]] = 0;
                                     });
-                                    console.log('✅ Expression indices mapped:', expressionIndices);
+                                    console.log('✅ Expression indices mapped:', JSON.stringify(expressionIndices));
                                 }
                             }
                         });
@@ -396,26 +395,47 @@
         
         // Expression change function - THIS IS THE KEY FUNCTION
         function morphToExpression(expressionName) {
+            console.log(`🎭 morphToExpression called with: "${expressionName}"`);
+            console.log(`🎭 Available expressions:`, Object.keys(expressionIndices));
+            
             if (!avatarMesh) {
                 console.warn('⚠️ Avatar mesh not ready yet');
                 return;
             }
             
-            console.log(`🎭 Morphing to expression: ${expressionName}`);
+            if (!avatarMesh.morphTargetInfluences) {
+                console.warn('⚠️ Avatar has no morphTargetInfluences array');
+                return;
+            }
+            
+            console.log(`🎭 Current influences count: ${avatarMesh.morphTargetInfluences.length}`);
             
             // Reset all expression influences to 0
-            Object.values(expressionIndices).forEach(idx => {
+            Object.entries(expressionIndices).forEach(([name, idx]) => {
                 targetInfluences[idx] = 0;
             });
             
-            // Set target expression to 1 (unless normal)
-            if (expressionName !== 'normal' && expressionIndices[expressionName] !== undefined) {
-                targetInfluences[expressionIndices[expressionName]] = 1;
-                console.log(`✅ Set ${expressionName} (index ${expressionIndices[expressionName]}) to 1`);
-            } else if (expressionName === 'normal') {
-                console.log('✅ Reset to normal expression');
+            // Handle different expression name formats (case insensitive)
+            const normalizedName = expressionName.toLowerCase().trim();
+            
+            // Find matching expression (case insensitive)
+            let matchedIndex = null;
+            let matchedName = null;
+            for (const [name, idx] of Object.entries(expressionIndices)) {
+                if (name.toLowerCase() === normalizedName) {
+                    matchedIndex = idx;
+                    matchedName = name;
+                    break;
+                }
+            }
+            
+            if (normalizedName === 'normal' || normalizedName === 'neutral') {
+                console.log('✅ Reset to normal/neutral expression (all targets at 0)');
+            } else if (matchedIndex !== null) {
+                targetInfluences[matchedIndex] = 1.0;
+                console.log(`✅ Set "${matchedName}" (index ${matchedIndex}) to 1.0`);
             } else {
-                console.warn(`⚠️ Expression "${expressionName}" not found in morph targets`);
+                console.warn(`⚠️ Expression "${expressionName}" not found. Available:`, Object.keys(expressionIndices));
             }
             
             currentExpression = expressionName;
