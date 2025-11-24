@@ -57,72 +57,31 @@
             to { transform: rotate(360deg); }
         }
 
-        /* Speech Bubble */
+        /* Speech Bubble - HIDDEN for minimalist mobile view (chat in Flutter) */
         #speech-bubble {
-            position: absolute;
-            bottom: 100px;
-            left: 50%;
-            transform: translateX(-50%);
-            max-width: 90%;
-            padding: 15px 20px;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
-            z-index: 5;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            font-size: 16px;
-            line-height: 1.5;
+            display: none;
         }
 
         #speech-bubble.active {
-            opacity: 1;
+            display: none;
         }
 
         #speech-bubble::after {
-            content: '';
-            position: absolute;
-            bottom: -10px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 0;
-            height: 0;
-            border-left: 10px solid transparent;
-            border-right: 10px solid transparent;
-            border-top: 10px solid white;
+            display: none;
         }
 
-        /* Status Badge */
+        /* Status Badge - HIDDEN for minimalist mobile view */
         #status-badge {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 8px 16px;
-            background: rgba(255,255,255,0.9);
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 600;
-            color: #333; /* Darker text for white bg */
-            z-index: 5;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: none;
         }
 
         #status-badge.speaking {
-            background: #4CAF50;
-            color: white;
+            display: none;
         }
 
-        /* Control Panel (CHANGED: Repositioned to the side) */
+        /* Control Panel - HIDDEN for minimalist mobile view (controls in Flutter) */
         #control-panel {
-            position: absolute;
-            right: 15px; /* Positioned on the right */
-            top: 50%; /* Centered vertically */
-            transform: translateY(-50%); /* Adjust for vertical centering */
-            display: flex;
-            flex-direction: column; /* Stack buttons vertically */
-            gap: 12px; /* Increased gap slightly */
-            z-index: 5;
+            display: none;
         }
 
         .control-btn {
@@ -159,24 +118,13 @@
             display: none;
         }
 
-        /* Expression indicator */
+        /* Expression indicator - HIDDEN for minimalist mobile view */
         #expression-indicator {
-            position: absolute;
-            top: 70px;
-            left: 50%;
-            transform: translateX(-50%);
-            padding: 6px 12px;
-            background: rgba(255,255,255,0.8);
-            border-radius: 15px;
-            font-size: 12px;
-            color: #333;
-            z-index: 5;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            display: none;
         }
 
         #expression-indicator.active {
-            opacity: 1;
+            display: none;
         }
 
         /* Error message */
@@ -250,6 +198,13 @@
         // Three.js variables
         let scene, camera, renderer, avatar, mixer, clock;
         let animations = {};
+        
+        // Expression system variables
+        let avatarMesh = null;
+        let expressionIndices = {};
+        let targetInfluences = {};
+        let currentInfluences = {};
+        const MORPH_SPEED = 0.15; // Speed of expression transitions
 
         // Initialize when DOM is loaded
         window.addEventListener('load', () => {
@@ -350,6 +305,23 @@
                                         node.material.depthWrite = true;
                                     }
                                 }
+                                
+                                // Setup expression morph targets
+                                if (node.morphTargetDictionary && node.morphTargetInfluences) {
+                                    avatarMesh = node;
+                                    console.log('🎭 Found morph targets:', Object.keys(node.morphTargetDictionary));
+                                    
+                                    // Map expression names to morph target indices
+                                    const expressionNames = ['normal', 'smile', 'laugh', 'sad', 'anger', 'surprise', 'frown', 'closed_smile', 'funny_smile', 'depress', 'disgust', 'fear'];
+                                    expressionNames.forEach(name => {
+                                        if (node.morphTargetDictionary[name] !== undefined) {
+                                            expressionIndices[name] = node.morphTargetDictionary[name];
+                                            targetInfluences[node.morphTargetDictionary[name]] = 0;
+                                            currentInfluences[node.morphTargetDictionary[name]] = 0;
+                                        }
+                                    });
+                                    console.log('✅ Expression indices mapped:', expressionIndices);
+                                }
                             }
                         });
                         
@@ -406,10 +378,51 @@
                 mixer.update(delta);
             }
             
-            // Removed idle rotation - avatar stays still
+            // Smooth expression morphing
+            if (avatarMesh && avatarMesh.morphTargetInfluences) {
+                Object.keys(targetInfluences).forEach(index => {
+                    const idx = parseInt(index);
+                    const target = targetInfluences[idx];
+                    const current = avatarMesh.morphTargetInfluences[idx] || 0;
+                    
+                    if (Math.abs(target - current) > 0.001) {
+                        avatarMesh.morphTargetInfluences[idx] = current + (target - current) * MORPH_SPEED;
+                    }
+                });
+            }
             
             renderer.render(scene, camera);
         }
+        
+        // Expression change function - THIS IS THE KEY FUNCTION
+        function morphToExpression(expressionName) {
+            if (!avatarMesh) {
+                console.warn('⚠️ Avatar mesh not ready yet');
+                return;
+            }
+            
+            console.log(`🎭 Morphing to expression: ${expressionName}`);
+            
+            // Reset all expression influences to 0
+            Object.values(expressionIndices).forEach(idx => {
+                targetInfluences[idx] = 0;
+            });
+            
+            // Set target expression to 1 (unless normal)
+            if (expressionName !== 'normal' && expressionIndices[expressionName] !== undefined) {
+                targetInfluences[expressionIndices[expressionName]] = 1;
+                console.log(`✅ Set ${expressionName} (index ${expressionIndices[expressionName]}) to 1`);
+            } else if (expressionName === 'normal') {
+                console.log('✅ Reset to normal expression');
+            } else {
+                console.warn(`⚠️ Expression "${expressionName}" not found in morph targets`);
+            }
+            
+            currentExpression = expressionName;
+        }
+        
+        // Expose changeExpression to window for Flutter calls
+        window.changeExpression = morphToExpression;
         
         function onWindowResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
