@@ -77,16 +77,19 @@
             scene = new THREE.Scene();
             scene.background = null;
 
-            // Camera - CRITICAL: near=50 to prevent z-fighting on forehead
-            camera = new THREE.PerspectiveCamera(25, width / height, 50, 5000);
-            camera.position.set(0, 55, 400);
-            camera.lookAt(0, 55, 0);
+            // Camera - wide FOV, will be positioned after model loads
+            // Using large near plane (100) to completely eliminate z-fighting
+            camera = new THREE.PerspectiveCamera(30, width / height, 100, 10000);
+            camera.position.set(0, 150, 500);
+            camera.lookAt(0, 150, 0);
 
             // Renderer - simple settings for mobile compatibility
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
                 alpha: true,
-                powerPreference: 'high-performance'
+                powerPreference: 'high-performance',
+                precision: 'highp',
+                depth: true
             });
             renderer.setSize(width, height);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -94,16 +97,16 @@
             renderer.setClearColor(0x000000, 0);
             container.appendChild(renderer.domElement);
 
-            // Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            // Lighting - soft and even
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
             scene.add(ambientLight);
 
-            const frontLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            frontLight.position.set(0, 100, 200);
+            const frontLight = new THREE.DirectionalLight(0xffffff, 0.6);
+            frontLight.position.set(0, 200, 400);
             scene.add(frontLight);
 
-            const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
-            fillLight.position.set(-100, 50, 100);
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+            fillLight.position.set(-200, 100, 200);
             scene.add(fillLight);
 
             // Load avatar
@@ -160,8 +163,8 @@
                     scene.add(avatar);
                     console.log('Avatar loaded with', morphMeshes.length, 'morph meshes');
 
-                    // Position camera to frame head
-                    fitCameraToHead();
+                    // Position camera to show head and shoulders
+                    fitCameraToAvatar();
 
                     // Hide loading
                     document.getElementById('loading').style.display = 'none';
@@ -188,32 +191,44 @@
         }
 
         // ============================================
-        // CAMERA POSITIONING
+        // CAMERA POSITIONING - ROBUST HEAD & SHOULDERS VIEW
         // ============================================
-        function fitCameraToHead() {
+        function fitCameraToAvatar() {
             if (!avatar) return;
 
+            // Get model bounds
             const box = new THREE.Box3().setFromObject(avatar);
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
 
-            // Estimate head position (top 15% of model)
-            const headY = box.min.y + size.y * 0.85;
+            // This model appears to be ~110 units tall based on logs
+            // We want to show head and upper torso (top 40% of model)
+            const modelHeight = size.y;
             
-            // Calculate distance for head framing
-            const fov = camera.fov * (Math.PI / 180);
-            const headSize = size.y * 0.15;
-            const distance = (headSize / 2) / Math.tan(fov / 2) * 2.5;
+            // Look at point: roughly at chin/neck level (70% up from bottom)
+            const lookAtY = box.min.y + modelHeight * 0.70;
+            
+            // Camera should be positioned to show head clearly
+            // Distance calculation: far enough to show head+shoulders, avoid clipping
+            // Using a fixed comfortable distance based on model scale
+            const cameraDistance = modelHeight * 2.5; // 2.5x model height away
+            const cameraY = box.min.y + modelHeight * 0.75; // Slightly above look point
 
-            camera.position.set(center.x, headY, center.z + distance);
-            camera.lookAt(center.x, headY, center.z);
+            // Position camera
+            camera.position.set(center.x, cameraY, center.z + cameraDistance);
+            camera.lookAt(center.x, lookAtY, center.z);
             
-            // Update near/far based on distance - KEEP near at 50 minimum
-            camera.near = Math.max(50, distance * 0.1);
-            camera.far = distance * 10;
+            // CRITICAL: Set near plane large enough to prevent z-fighting
+            // Near must be > distance to closest rendered point
+            // With camera at ~275 units away, near=100 gives plenty of margin
+            camera.near = Math.max(100, cameraDistance * 0.3);
+            camera.far = cameraDistance * 5;
             camera.updateProjectionMatrix();
 
-            console.log('Camera positioned: headY=' + headY.toFixed(1) + ', distance=' + distance.toFixed(1) + ', near=' + camera.near);
+            console.log('Camera: distance=' + cameraDistance.toFixed(0) + 
+                       ', lookAtY=' + lookAtY.toFixed(0) + 
+                       ', near=' + camera.near.toFixed(0) +
+                       ', modelHeight=' + modelHeight.toFixed(0));
         }
 
         // ============================================
