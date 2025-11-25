@@ -111,6 +111,41 @@
             animate();
         }
         
+        // Auto-fit camera to avatar head/face
+        function fitCameraToHead(object) {
+            const box = new THREE.Box3().setFromObject(object);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            // 1. Determine where the "Face" is
+            // Shift target Y up to focus on the upper portion of the model
+            const faceTargetY = center.y + (size.y * 0.35);
+            
+            controls.target.set(0, faceTargetY, 0);
+            camera.lookAt(0, faceTargetY, 0);
+
+            // 2. Calculate Distance required to fit the head vertically
+            // Estimate head size is roughly 1/4th of the total height
+            const headSize = size.y * 0.25;
+            
+            // Calculate distance based on Field of View
+            const fov = camera.fov * (Math.PI / 180);
+            let distance = Math.abs(headSize / Math.tan(fov / 2));
+
+            // 3. Apply a "Zoom Out" factor
+            // Increase this number to move camera further back
+            const zoomOutFactor = 2.5;
+            
+            camera.position.set(0, faceTargetY, distance * zoomOutFactor);
+            
+            // Update control limits based on calculated distance
+            controls.minDistance = distance * 0.5;
+            controls.maxDistance = distance * 5;
+            controls.update();
+            
+            console.log('Camera auto-fit: faceY=' + faceTargetY.toFixed(1) + ', distance=' + (distance * zoomOutFactor).toFixed(1));
+        }
+
         function setupLighting() {
             // Ambient
             const ambient = new THREE.AmbientLight(0xffffff, 0.4);
@@ -177,6 +212,9 @@
                             mixer.clipAction(idle).play();
                         }
                     }
+                    
+                    // Auto-fit camera to avatar head
+                    fitCameraToHead(avatarGroup);
                     
                     // Hide loading
                     document.getElementById('loading').style.display = 'none';
