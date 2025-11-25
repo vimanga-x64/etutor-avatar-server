@@ -131,50 +131,28 @@
                 function(gltf) {
                     avatar = gltf.scene;
                     
-                    // =====================================================
-                    // Z-FIGHTING FIX: Apply staggered polygon offset to each material
-                    // The forehead gash is caused by overlapping primitives with same depth
-                    // Each material gets a different offset to ensure clean layering
-                    // =====================================================
-                    
                     // Process all meshes
                     avatar.traverse(function(node) {
                         if (node.isMesh) {
                             if (node.material) {
                                 const materials = Array.isArray(node.material) ? node.material : [node.material];
                                 materials.forEach((mat, idx) => {
-                                    // CRITICAL: Stagger polygon offset for each material
-                                    // This ensures no two surfaces share the same depth value
-                                    mat.polygonOffset = true;
-                                    
-                                    if (mat.name === 'Texture1') {
-                                        // Face skin - render in front (lowest offset)
-                                        mat.polygonOffsetFactor = -1;
-                                        mat.polygonOffsetUnits = -1;
-                                        console.log('Texture1 (face): offset -1');
-                                    } else if (mat.name === 'Texture2') {
-                                        // Eyes/details - middle layer
-                                        mat.polygonOffsetFactor = 0;
-                                        mat.polygonOffsetUnits = 0;
-                                        console.log('Texture2 (eyes): offset 0');
-                                    } else if (mat.name === 'Texture3') {
-                                        // Hair - render behind (highest offset)
-                                        mat.polygonOffsetFactor = 2;
-                                        mat.polygonOffsetUnits = 2;
-                                        console.log('Texture3 (hair): offset 2');
-                                    } else {
-                                        // Unknown material - use index-based offset
-                                        mat.polygonOffsetFactor = idx;
-                                        mat.polygonOffsetUnits = idx;
-                                        console.log('Material', mat.name || idx, ': offset', idx);
-                                    }
+                                    // =====================================================
+                                    // FIX BLACK GASH: From e-learning-avatar-web
+                                    // The gash is caused by transparent pixels not being discarded
+                                    // alphaTest = 0.5 discards pixels with alpha < 0.5
+                                    // =====================================================
+                                    mat.transparent = true;
+                                    mat.alphaTest = 0.5;  // CRITICAL: Discard low-alpha pixels (fixes gash!)
                                     
                                     mat.depthTest = true;
                                     mat.depthWrite = true;
                                     mat.morphTargets = true;
                                     mat.morphNormals = true;
-                                    mat.side = THREE.FrontSide; // Only render front faces
+                                    mat.side = THREE.FrontSide;
                                     mat.needsUpdate = true;
+                                    
+                                    console.log('Material fixed:', mat.name || idx);
                                 });
                             }
                             
