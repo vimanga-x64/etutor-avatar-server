@@ -647,6 +647,14 @@
             try {
                 await avatarController.init(container);
                 log('Avatar ready!');
+                
+                // Expose global function for Flutter's runJavaScript calls
+                window.changeExpression = (name, intensity = 1.0) => {
+                    log(`changeExpression called: ${name}`);
+                    return window.AvatarAPI.setExpressionImmediate(name, intensity);
+                };
+                
+                log('changeExpression function registered');
             } catch (error) {
                 log(`Initialization error: ${error.message}`);
             }
