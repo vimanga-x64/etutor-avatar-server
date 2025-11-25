@@ -131,32 +131,44 @@
                 function(gltf) {
                     avatar = gltf.scene;
                     
-                    // Find all meshes with morph targets
+                    // Process all meshes
                     avatar.traverse(function(node) {
-                        if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
-                            console.log('Found morph mesh:', node.name, Object.keys(node.morphTargetDictionary).join(','));
-                            
-                            // CRITICAL: Enable morphing on material for r128
+                        if (node.isMesh) {
+                            // =====================================================
+                            // FIX FOR FOREHEAD GASH - Apply polygon offset to ALL meshes
+                            // This pushes back-facing polygons slightly behind front-facing
+                            // preventing z-fighting where surfaces overlap
+                            // =====================================================
                             if (node.material) {
-                                if (Array.isArray(node.material)) {
-                                    node.material.forEach(mat => {
-                                        mat.morphTargets = true;
-                                        mat.morphNormals = true;
-                                        mat.needsUpdate = true;
-                                    });
-                                } else {
-                                    node.material.morphTargets = true;
-                                    node.material.morphNormals = true;
-                                    node.material.needsUpdate = true;
+                                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                                materials.forEach(mat => {
+                                    // Enable polygon offset to prevent z-fighting
+                                    mat.polygonOffset = true;
+                                    mat.polygonOffsetFactor = 1;
+                                    mat.polygonOffsetUnits = 1;
+                                    
+                                    // Ensure proper depth testing
+                                    mat.depthTest = true;
+                                    mat.depthWrite = true;
+                                    
+                                    // Enable morphing for r128
+                                    mat.morphTargets = true;
+                                    mat.morphNormals = true;
+                                    mat.needsUpdate = true;
+                                });
+                            }
+                            
+                            // Collect meshes with morph targets
+                            if (node.morphTargetInfluences && node.morphTargetDictionary) {
+                                console.log('Found morph mesh:', node.name, Object.keys(node.morphTargetDictionary).join(','));
+                                
+                                // Initialize morph influences to 0
+                                for (let i = 0; i < node.morphTargetInfluences.length; i++) {
+                                    node.morphTargetInfluences[i] = 0;
                                 }
+                                
+                                morphMeshes.push(node);
                             }
-                            
-                            // Initialize morph influences to 0
-                            for (let i = 0; i < node.morphTargetInfluences.length; i++) {
-                                node.morphTargetInfluences[i] = 0;
-                            }
-                            
-                            morphMeshes.push(node);
                         }
                     });
 
