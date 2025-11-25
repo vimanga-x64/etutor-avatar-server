@@ -376,12 +376,19 @@
                             
                             log(`Created dictionary with ${Object.keys(child.morphTargetDictionary).length} entries`);
                             
-                            this.headMesh = child;
-                            this.buildMorphTargetMap(child);
+                            // Store ALL meshes with morph targets
+                            if (!this.morphMeshes) this.morphMeshes = [];
+                            this.morphMeshes.push(child);
+                            
+                            // Keep first as headMesh for backward compatibility
+                            if (!this.headMesh) {
+                                this.headMesh = child;
+                                this.buildMorphTargetMap(child);
+                            }
                         }
                     }
                     
-                    // Enhance materials
+                    // Enhance materials for mobile WebGL
                     if (child.isMesh && child.material) {
                         if (Array.isArray(child.material)) {
                             child.material.forEach(mat => this.enhanceMaterial(mat));
@@ -391,7 +398,9 @@
                     }
                 });
                 
-                if (!this.headMesh) {
+                if (this.morphMeshes && this.morphMeshes.length > 0) {
+                    log(`Found ${this.morphMeshes.length} meshes with morph targets`);
+                } else if (!this.headMesh) {
                     log('WARNING: No mesh with morph targets found!');
                     
                     // List all meshes for debugging
@@ -428,7 +437,35 @@
             enhanceMaterial(material) {
                 if (material.isMeshStandardMaterial || material.isMeshPhysicalMaterial) {
                     material.envMapIntensity = 0.5;
+                    
+                    // Fix for mobile WebGL - reduce texture quality if needed
+                    if (material.map) {
+                        material.map.generateMipmaps = false;
+                        material.map.minFilter = THREE.LinearFilter;
+                    }
+                    if (material.normalMap) {
+                        material.normalMap.generateMipmaps = false;
+                        material.normalMap.minFilter = THREE.LinearFilter;
+                    }
+                    if (material.roughnessMap) {
+                        material.roughnessMap.generateMipmaps = false;
+                        material.roughnessMap.minFilter = THREE.LinearFilter;
+                    }
+                    if (material.metalnessMap) {
+                        material.metalnessMap.generateMipmaps = false;
+                        material.metalnessMap.minFilter = THREE.LinearFilter;
+                    }
+                    
                     material.needsUpdate = true;
+                }
+            }
+            
+            // Apply expression to ALL meshes with morph targets
+            applyToAllMeshes(callback) {
+                if (this.morphMeshes) {
+                    this.morphMeshes.forEach(mesh => callback(mesh));
+                } else if (this.headMesh) {
+                    callback(this.headMesh);
                 }
             }
 
@@ -452,11 +489,13 @@
                     this.currentExpression = 'neutral';
                     
                     if (immediate) {
-                        // Immediately set all influences to 0
-                        for (let i = 0; i < this.headMesh.morphTargetInfluences.length; i++) {
-                            this.headMesh.morphTargetInfluences[i] = 0;
-                            this.currentInfluences[i] = 0;
-                        }
+                        // Immediately set all influences to 0 on ALL meshes
+                        this.applyToAllMeshes((mesh) => {
+                            for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
+                                mesh.morphTargetInfluences[i] = 0;
+                            }
+                        });
+                        this.currentInfluences.fill(0);
                     }
                     return true;
                 }
@@ -488,12 +527,14 @@
                     this.expressionIntensity = clampedIntensity;
                     
                     if (immediate) {
-                        // Immediately apply the expression
-                        for (let i = 0; i < this.headMesh.morphTargetInfluences.length; i++) {
-                            this.headMesh.morphTargetInfluences[i] = this.targetInfluences[i];
-                            this.currentInfluences[i] = this.targetInfluences[i];
-                        }
-                        log(`IMMEDIATE: Set morph ${targetIndex} to ${clampedIntensity}`);
+                        // Immediately apply the expression to ALL meshes
+                        this.applyToAllMeshes((mesh) => {
+                            for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
+                                mesh.morphTargetInfluences[i] = this.targetInfluences[i];
+                            }
+                        });
+                        this.currentInfluences = [...this.targetInfluences];
+                        log(`IMMEDIATE: Set morph ${targetIndex} to ${clampedIntensity} on ${this.morphMeshes?.length || 1} mesh(es)`);
                     }
                     
                     log(`Expression ${expressionName} -> morph index ${targetIndex} = ${clampedIntensity}`);
@@ -523,22 +564,28 @@
             updateMorphTargets(deltaTime) {
                 if (!this.headMesh || !this.headMesh.morphTargetInfluences) return;
                 
-                const influences = this.headMesh.morphTargetInfluences;
                 let changed = false;
                 
-                for (let i = 0; i < influences.length; i++) {
+                for (let i = 0; i < this.currentInfluences.length; i++) {
                     const current = this.currentInfluences[i];
                     const target = this.targetInfluences[i];
                     
                     if (Math.abs(current - target) > 0.001) {
                         // Smooth interpolation
                         this.currentInfluences[i] += (target - current) * this.morphSpeed;
-                        influences[i] = this.currentInfluences[i];
                         changed = true;
                     } else if (current !== target) {
                         this.currentInfluences[i] = target;
-                        influences[i] = target;
                     }
+                }
+                
+                // Apply to ALL meshes
+                if (changed) {
+                    this.applyToAllMeshes((mesh) => {
+                        for (let i = 0; i < mesh.morphTargetInfluences.length; i++) {
+                            mesh.morphTargetInfluences[i] = this.currentInfluences[i];
+                        }
+                    });
                 }
                 
                 return changed;
