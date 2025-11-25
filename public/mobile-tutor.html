@@ -205,8 +205,6 @@
                                 mats.forEach(mat => {
                                     if (mat.map) mat.map.generateMipmaps = false;
                                     if (mat.normalMap) mat.normalMap.generateMipmaps = false;
-                                    // Ensure morph targets are enabled
-                                    mat.morphTargets = true;
                                     mat.needsUpdate = true;
                                 });
                             }
@@ -214,6 +212,11 @@
                             // Collect morphable meshes
                             if (child.morphTargetDictionary && child.morphTargetInfluences) {
                                 morphMeshes.push(child);
+                                // Ensure morph target influences array exists and is right size
+                                const morphCount = Object.keys(child.morphTargetDictionary).length;
+                                if (!child.morphTargetInfluences || child.morphTargetInfluences.length !== morphCount) {
+                                    child.morphTargetInfluences = new Float32Array(morphCount);
+                                }
                                 console.log('Found morph mesh:', child.name, Object.keys(child.morphTargetDictionary));
 
                                 // Build map from first mesh
@@ -336,6 +339,10 @@
                         if (foundTarget) {
                             const idx = mesh.morphTargetDictionary[foundTarget];
                             mesh.morphTargetInfluences[idx] = intensity;
+                            // Force geometry update for morph targets
+                            if (mesh.geometry) {
+                                mesh.geometry.attributes.position.needsUpdate = true;
+                            }
                             console.log('SUCCESS: Applied', foundTarget, 'idx=' + idx, 'on mesh[' + meshIdx + ']', mesh.name);
                             applied = true;
                         }
