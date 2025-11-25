@@ -131,48 +131,49 @@
                 function(gltf) {
                     avatar = gltf.scene;
                     
+                    // =====================================================
+                    // Z-FIGHTING FIX: Apply staggered polygon offset to each material
+                    // The forehead gash is caused by overlapping primitives with same depth
+                    // Each material gets a different offset to ensure clean layering
+                    // =====================================================
+                    
                     // Process all meshes
                     avatar.traverse(function(node) {
                         if (node.isMesh) {
-                            // =====================================================
-                            // PERMANENT FIX FOR FOREHEAD GASH
-                            // The gash is caused by hair mesh (normal_3) z-fighting with
-                            // the face/head mesh. We fix by:
-                            // 1. Moving hair mesh slightly backward in local Z
-                            // 2. Setting render order so face renders on top
-                            // =====================================================
-                            
-                            const isHairMesh = node.name.includes('3') || 
-                                               (node.material && node.material.name && 
-                                                node.material.name.includes('3'));
-                            
-                            if (isHairMesh) {
-                                // Push hair back slightly to prevent overlap with face
-                                node.position.z -= 0.5;
-                                node.renderOrder = 0; // Hair renders first (behind)
-                                console.log('Hair mesh adjusted:', node.name);
-                            } else {
-                                node.renderOrder = 1; // Face renders second (in front)
-                            }
-                            
                             if (node.material) {
                                 const materials = Array.isArray(node.material) ? node.material : [node.material];
                                 materials.forEach((mat, idx) => {
-                                    // Texture3 is typically hair - push it back
-                                    if (mat.name === 'Texture3') {
-                                        mat.polygonOffset = true;
-                                        mat.polygonOffsetFactor = 4;  // Strong offset for hair
-                                        mat.polygonOffsetUnits = 4;
-                                        console.log('Hair material offset applied');
+                                    // CRITICAL: Stagger polygon offset for each material
+                                    // This ensures no two surfaces share the same depth value
+                                    mat.polygonOffset = true;
+                                    
+                                    if (mat.name === 'Texture1') {
+                                        // Face skin - render in front (lowest offset)
+                                        mat.polygonOffsetFactor = -1;
+                                        mat.polygonOffsetUnits = -1;
+                                        console.log('Texture1 (face): offset -1');
+                                    } else if (mat.name === 'Texture2') {
+                                        // Eyes/details - middle layer
+                                        mat.polygonOffsetFactor = 0;
+                                        mat.polygonOffsetUnits = 0;
+                                        console.log('Texture2 (eyes): offset 0');
+                                    } else if (mat.name === 'Texture3') {
+                                        // Hair - render behind (highest offset)
+                                        mat.polygonOffsetFactor = 2;
+                                        mat.polygonOffsetUnits = 2;
+                                        console.log('Texture3 (hair): offset 2');
                                     } else {
-                                        // Face materials - no offset, render on top
-                                        mat.polygonOffset = false;
+                                        // Unknown material - use index-based offset
+                                        mat.polygonOffsetFactor = idx;
+                                        mat.polygonOffsetUnits = idx;
+                                        console.log('Material', mat.name || idx, ': offset', idx);
                                     }
                                     
                                     mat.depthTest = true;
                                     mat.depthWrite = true;
                                     mat.morphTargets = true;
                                     mat.morphNormals = true;
+                                    mat.side = THREE.FrontSide; // Only render front faces
                                     mat.needsUpdate = true;
                                 });
                             }
