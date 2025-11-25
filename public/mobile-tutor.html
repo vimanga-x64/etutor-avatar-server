@@ -3,135 +3,43 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>E-Tutor Assistant</title>
+    <title>E-Tutor Avatar</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            -webkit-tap-highlight-color: transparent;
-        }
-
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            /* CHANGED: Set background to black */
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #000;
             overflow: hidden;
             position: fixed;
             width: 100vw;
             height: 100vh;
         }
-
-        /* Avatar Container */
         #avatar-canvas {
             position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             z-index: 1;
         }
-
-        /* Loading State */
         #loading {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
             text-align: center;
             color: white;
             z-index: 10;
         }
-
         .spinner {
-            width: 50px;
-            height: 50px;
-            margin: 0 auto 20px;
-            border: 4px solid rgba(255,255,255,0.3);
-            border-top-color: white;
+            width: 40px; height: 40px;
+            margin: 0 auto 16px;
+            border: 3px solid rgba(255,255,255,0.2);
+            border-top-color: #667eea;
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            animation: spin 0.8s linear infinite;
         }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Speech Bubble - HIDDEN for minimalist mobile view (chat in Flutter) */
-        #speech-bubble {
-            display: none;
-        }
-
-        #speech-bubble.active {
-            display: none;
-        }
-
-        #speech-bubble::after {
-            display: none;
-        }
-
-        /* Status Badge - HIDDEN for minimalist mobile view */
-        #status-badge {
-            display: none;
-        }
-
-        #status-badge.speaking {
-            display: none;
-        }
-
-        /* Control Panel - HIDDEN for minimalist mobile view (controls in Flutter) */
-        #control-panel {
-            display: none;
-        }
-
-        .control-btn {
-            width: 45px;
-            height: 45px;
-            border: none;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.8); /* Slightly transparent */
-            backdrop-filter: blur(5px);
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .control-btn:active {
-            transform: scale(0.95);
-            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-        }
-
-        .control-btn.primary {
-            background: #667eea;
-            color: white;
-            width: 55px;
-            height: 55px;
-            font-size: 24px;
-        }
-
-        /* Hidden video for lip sync */
-        #avatar-video {
-            display: none;
-        }
-
-        /* Expression indicator - HIDDEN for minimalist mobile view */
-        #expression-indicator {
-            display: none;
-        }
-
-        #expression-indicator.active {
-            display: none;
-        }
-
-        /* Error message */
+        @keyframes spin { to { transform: rotate(360deg); } }
         #error-message {
             position: absolute;
-            bottom: 20px;
-            left: 50%;
+            bottom: 20px; left: 50%;
             transform: translateX(-50%);
             max-width: 90%;
             padding: 12px 20px;
@@ -147,466 +55,330 @@
 <body>
     <div id="loading">
         <div class="spinner"></div>
-        <p style="font-size: 18px; font-weight: 500;">Loading E-Tutor Assistant...</p>
-        <p style="font-size: 14px; margin-top: 10px; opacity: 0.8;">Powered by Cloud AI</p>
+        <p style="font-size: 16px; font-weight: 500;">Loading Avatar...</p>
     </div>
-
     <div id="avatar-canvas"></div>
-
-    <div id="status-badge">Ready to help</div>
-
-    <div id="expression-indicator">😊 Neutral</div>
-
-    <div id="speech-bubble">
-        Hello! I'm your E-Tutor assistant. How can I help you today?
-    </div>
-
-    <div id="control-panel">
-        <button class="control-btn" onclick="toggleMute()" title="Mute/Unmute">
-            🔊
-        </button>
-        <button class="control-btn primary" onclick="startListening()" title="Ask a question">
-            🎤
-        </button>
-        <button class="control-btn" onclick="showMenu()" title="Menu">
-            ⚙️
-        </button>
-    </div>
-
     <div id="error-message"></div>
 
-    <video id="avatar-video" autoplay muted loop></video>
-
     <script type="importmap">
-        {
-            "imports": {
-                "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
-                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
-            }
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/"
         }
+    }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-        
-        // Mobile E-Learning Avatar Controller
-        let isLoading = true;
-        let isSpeaking = false;
-        let currentExpression = 'neutral';
-        let isMuted = false;
-        
-        // Three.js variables
-        let scene, camera, renderer, avatar, mixer, clock;
-        let animations = {};
-        
-        // Expression system variables - support MULTIPLE meshes with morph targets
-        let avatarMeshes = []; // Array of all meshes with morph targets
-        let expressionIndices = {};
-        let targetInfluences = {};
-        const MORPH_SPEED = 0.2; // Speed of expression transitions (increased for visibility)
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 
-        // Initialize when DOM is loaded
-        window.addEventListener('load', () => {
-            initializeAvatar();
-        });
+        // ============================================================
+        // E-TUTOR PROFESSIONAL AVATAR SYSTEM
+        // Expression system using OBJ mesh swapping
+        // Supports: Male/Female avatars, 12 expressions
+        // ============================================================
 
-        async function initializeAvatar() {
+        const CONFIG = {
+            modelsPath: '/models/',
+            expressionsPath: '/models/models_female/expressions/',
+            defaultAvatar: 'avatar_female.glb',
+            cameraFOV: 55,
+            cameraDistance: 2.0,
+            cameraHeight: 1.55,
+            lookAtHeight: 1.5
+        };
+
+        const EXPRESSIONS = [
+            'normal', 'smile', 'laugh', 'sad', 'anger', 'surprise',
+            'frown', 'closed_smile', 'funny_smile', 'depress', 'disgust', 'fear'
+        ];
+
+        let scene, camera, renderer, clock;
+        let avatarBody = null;
+        let currentFaceMesh = null;
+        let currentExpression = 'normal';
+        let expressionCache = {};
+
+        const gltfLoader = new GLTFLoader();
+        const objLoader = new OBJLoader();
+        const mtlLoader = new MTLLoader();
+        const textureLoader = new THREE.TextureLoader();
+
+        function log(msg) { console.log(`[Avatar] ${msg}`); }
+
+        window.addEventListener('load', init);
+
+        async function init() {
+            log('Initializing...');
             try {
-                console.log('🎬 Initializing 3D Avatar...');
+                setupScene();
+                setupLighting();
+                await loadAvatar();
+                await loadExpression('normal');
                 
-                // Setup Three.js scene
-                scene = new THREE.Scene();
-                // CHANGED: Set background to black
-                scene.background = new THREE.Color(0x000000); 
+                document.getElementById('loading').style.display = 'none';
+                clock = new THREE.Clock();
+                animate();
                 
-                // Camera - positioned for head and shoulders portrait view
-                // CHANGED: FOV from 70 to 50 for a portrait zoom
-                camera = new THREE.PerspectiveCamera(
-                    60,
-                    window.innerWidth / window.innerHeight,
-                    0.1,
-                    1000
-                );
-                // CHANGED: Moved camera closer (z: 1.8) for a larger view
-                camera.position.set(0, 1.6, 2.2);
-                // CHANGED: Look at face-level (y: 1.6)
-                camera.lookAt(0, 1.5, 0);
-                
-                // Renderer
-                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                renderer.setSize(window.innerWidth, window.innerHeight);
-                renderer.setPixelRatio(window.devicePixelRatio);
-                renderer.shadowMap.enabled = true;
-                
-                const container = document.getElementById('avatar-canvas');
-                container.appendChild(renderer.domElement);
-                
-                // Lighting
-                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-                scene.add(ambientLight);
-                
-                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-                directionalLight.position.set(2, 4, 3);
-                directionalLight.castShadow = true;
-                scene.add(directionalLight);
-                
-                const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
-                fillLight.position.set(-2, 2, -2);
-                scene.add(fillLight);
-                
-                // Load avatar model
-                console.log('📦 Loading avatar model...');
-                const loader = new GLTFLoader();
-                
-                loader.load(
-                    '/models/avatar_female.glb',
+                sendToFlutter({ type: 'ready', expressions: EXPRESSIONS });
+                log('✅ Ready');
+            } catch (error) {
+                console.error('Init error:', error);
+                showError('Failed to load: ' + error.message);
+            }
+        }
+
+        function setupScene() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+
+            camera = new THREE.PerspectiveCamera(
+                CONFIG.cameraFOV,
+                window.innerWidth / window.innerHeight,
+                0.1, 1000
+            );
+            camera.position.set(0, CONFIG.cameraHeight, CONFIG.cameraDistance);
+            camera.lookAt(0, CONFIG.lookAtHeight, 0);
+
+            renderer = new THREE.WebGLRenderer({ 
+                antialias: true, 
+                alpha: true,
+                powerPreference: 'high-performance'
+            });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+            document.getElementById('avatar-canvas').appendChild(renderer.domElement);
+            window.addEventListener('resize', onResize);
+        }
+
+        function setupLighting() {
+            scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+            
+            const keyLight = new THREE.DirectionalLight(0xffffff, 0.9);
+            keyLight.position.set(2, 3, 3);
+            scene.add(keyLight);
+            
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+            fillLight.position.set(-2, 2, 2);
+            scene.add(fillLight);
+            
+            const rimLight = new THREE.DirectionalLight(0xffffff, 0.3);
+            rimLight.position.set(0, 2, -3);
+            scene.add(rimLight);
+        }
+
+        async function loadAvatar() {
+            log('Loading avatar body...');
+            return new Promise((resolve, reject) => {
+                gltfLoader.load(
+                    CONFIG.modelsPath + CONFIG.defaultAvatar,
                     (gltf) => {
-                        console.log('✅ Avatar model loaded successfully');
-                        avatar = gltf.scene;
+                        avatarBody = gltf.scene;
                         
-                        // Calculate bounding box for proper positioning
-                        const box = new THREE.Box3().setFromObject(avatar);
+                        const box = new THREE.Box3().setFromObject(avatarBody);
                         const size = box.getSize(new THREE.Vector3());
                         const center = box.getCenter(new THREE.Vector3());
                         
-                        console.log('📏 Avatar size:', size);
-                        console.log('📍 Avatar center:', center);
-                        
-                        // Scale down the avatar dramatically (it's 400 units tall, we want ~1.7)
-                        const targetHeight = 1.7; // Average human height in meters
-                        const scaleFactor = targetHeight / size.y;
-                        avatar.scale.set(scaleFactor, scaleFactor, scaleFactor);
-                        
-                        // Position avatar at ground level (Y=0), centered
-                        avatar.position.set(
-                            -center.x * scaleFactor,
-                            -center.y * scaleFactor + 1.5,
-                            -center.z * scaleFactor
-                            );
-                        
-                        console.log('🔧 Scale factor:', scaleFactor);
-                        console.log('🔧 New position:', avatar.position);
-                        
-                        // Fix transparency issues on materials
-                        avatar.traverse((node) => {
-                            if (node.isMesh) {
-                                // Fix alpha rendering issues
-                                if (node.material) {
-                                    if (Array.isArray(node.material)) {
-                                        node.material.forEach(mat => {
-                                            mat.alphaTest = 0.5; // Discard transparent pixels below 0.5
-                                            mat.transparent = true;
-                                            mat.depthWrite = true;
-                                        });
-                                    } else {
-                                        node.material.alphaTest = 0.5;
-                                        node.material.transparent = true;
-                                        node.material.depthWrite = true;
-                                    }
-                                }
-                                
-                                // Setup expression morph targets - collect ALL meshes
-                                if (node.morphTargetDictionary && node.morphTargetInfluences) {
-                                    avatarMeshes.push(node);
-                                    const morphNames = Object.keys(node.morphTargetDictionary);
-                                    console.log('🎭 Found mesh "' + node.name + '" with morph targets (' + morphNames.length + '):', morphNames);
-                                    
-                                    // Map ALL available morph targets for expressions
-                                    morphNames.forEach(name => {
-                                        if (expressionIndices[name] === undefined) {
-                                            expressionIndices[name] = node.morphTargetDictionary[name];
-                                            targetInfluences[name] = 0;
-                                        }
-                                    });
-                                }
+                        const scale = 1.7 / size.y;
+                        avatarBody.scale.setScalar(scale);
+                        avatarBody.position.set(
+                            -center.x * scale,
+                            -center.y * scale + 1.5,
+                            -center.z * scale
+                        );
+
+                        avatarBody.traverse((node) => {
+                            if (node.isMesh && node.material) {
+                                const mats = Array.isArray(node.material) ? node.material : [node.material];
+                                mats.forEach(mat => {
+                                    mat.transparent = true;
+                                    mat.alphaTest = 0.5;
+                                    mat.depthWrite = true;
+                                    mat.side = THREE.DoubleSide;
+                                });
                             }
                         });
-                        
-                        console.log('✅ Total meshes with morph targets:', avatarMeshes.length);
-                        console.log('✅ Expression indices mapped:', JSON.stringify(expressionIndices));
-                        
-                        scene.add(avatar);
-                        
-                        // Setup animations
-                        if (gltf.animations && gltf.animations.length > 0) {
-                            mixer = new THREE.AnimationMixer(avatar);
-                            gltf.animations.forEach((clip) => {
-                                animations[clip.name] = mixer.clipAction(clip);
-                            });
-                            console.log('🎭 Animations loaded:', Object.keys(animations));
-                        }
-                        
-                        // Hide loading
-                        document.getElementById('loading').style.display = 'none';
-                        
-                        // Start render loop
-                        clock = new THREE.Clock();
-                        animate();
-                        
-                        // Show welcome message
-                        setTimeout(() => {
-                            showSpeechBubble('Hello! I\'m your E-Tutor assistant. How can I help you today?', 3000);
-                        }, 500);
-                        
-                        // Notify Flutter that we're ready
-                        sendToFlutter({ type: 'ready', timestamp: Date.now() });
+
+                        scene.add(avatarBody);
+                        log('✅ Avatar body loaded');
+                        resolve();
                     },
-                    (progress) => {
-                        const percent = Math.round((progress.loaded / progress.total) * 100);
-                        console.log(`📥 Loading: ${percent}%`);
-                    },
-                    (error) => {
-                        console.error('❌ Error loading avatar:', error);
-                        showError('Failed to load avatar model. Please check the connection.');
-                    }
+                    (p) => log(`Loading: ${Math.round((p.loaded/p.total)*100)}%`),
+                    reject
                 );
-                
-                // Handle window resize
-                window.addEventListener('resize', onWindowResize, false);
-                
-            } catch (error) {
-                console.error('❌ Avatar initialization error:', error);
-                showError('Failed to initialize avatar: ' + error.message);
-            }
-        }
-        
-        function animate() {
-            requestAnimationFrame(animate);
-            
-            if (mixer && clock) {
-                const delta = clock.getDelta();
-                mixer.update(delta);
-            }
-            
-            // Smooth expression morphing - apply to ALL meshes with morph targets
-            avatarMeshes.forEach(mesh => {
-                if (mesh && mesh.morphTargetInfluences && mesh.morphTargetDictionary) {
-                    Object.keys(targetInfluences).forEach(expressionName => {
-                        const idx = mesh.morphTargetDictionary[expressionName];
-                        if (idx !== undefined) {
-                            const target = targetInfluences[expressionName];
-                            const current = mesh.morphTargetInfluences[idx] || 0;
-                            
-                            if (Math.abs(target - current) > 0.001) {
-                                mesh.morphTargetInfluences[idx] = current + (target - current) * MORPH_SPEED;
-                            }
-                        }
-                    });
-                }
             });
-            
-            renderer.render(scene, camera);
         }
-        
-        // Expression change function - THIS IS THE KEY FUNCTION
-        function morphToExpression(expressionName) {
-            console.log(`🎭 morphToExpression called with: "${expressionName}"`);
-            console.log(`🎭 Available expressions:`, Object.keys(expressionIndices));
-            console.log(`🎭 Number of avatar meshes:`, avatarMeshes.length);
+
+        async function loadExpression(name) {
+            name = name.toLowerCase().trim();
             
-            if (avatarMeshes.length === 0) {
-                console.warn('⚠️ No avatar meshes with morph targets found');
+            // Map 'neutral' to 'normal'
+            if (name === 'neutral') name = 'normal';
+            
+            if (!EXPRESSIONS.includes(name)) {
+                log(`⚠️ Unknown expression: ${name}, available: ${EXPRESSIONS.join(', ')}`);
                 return;
             }
-            
-            // Reset all expression influences to 0
-            Object.keys(targetInfluences).forEach(name => {
-                targetInfluences[name] = 0;
-            });
-            
-            // Handle different expression name formats (case insensitive)
-            const normalizedName = expressionName.toLowerCase().trim();
-            
-            // Find matching expression (case insensitive)
-            let matchedName = null;
-            for (const name of Object.keys(expressionIndices)) {
-                if (name.toLowerCase() === normalizedName) {
-                    matchedName = name;
-                    break;
-                }
+
+            if (name === currentExpression && currentFaceMesh) {
+                log(`Already showing: ${name}`);
+                return;
             }
-            
-            if (normalizedName === 'normal' || normalizedName === 'neutral') {
-                console.log('✅ Reset to normal/neutral expression (all targets at 0)');
-                // Also try to set 'normal' if it exists
-                if (expressionIndices['normal'] !== undefined) {
-                    targetInfluences['normal'] = 0;
-                }
-            } else if (matchedName !== null) {
-                targetInfluences[matchedName] = 1.0;
-                console.log(`✅ Set "${matchedName}" to 1.0`);
+
+            log(`🎭 Loading expression: ${name}`);
+
+            try {
+                let faceMesh;
                 
-                // IMMEDIATE application for debugging - force set on all meshes
-                avatarMeshes.forEach((mesh, i) => {
-                    if (mesh.morphTargetDictionary && mesh.morphTargetDictionary[matchedName] !== undefined) {
-                        const idx = mesh.morphTargetDictionary[matchedName];
-                        mesh.morphTargetInfluences[idx] = 1.0;
-                        console.log(`✅ Direct set on mesh ${i}: ${matchedName} (idx ${idx}) = 1.0`);
-                    }
-                });
-            } else {
-                console.warn(`⚠️ Expression "${expressionName}" not found. Available:`, Object.keys(expressionIndices));
+                if (expressionCache[name]) {
+                    faceMesh = expressionCache[name].clone();
+                    log(`Using cached: ${name}`);
+                } else {
+                    faceMesh = await loadExpressionOBJ(name);
+                    expressionCache[name] = faceMesh.clone();
+                    log(`Loaded and cached: ${name}`);
+                }
+
+                // Position to match avatar
+                if (avatarBody) {
+                    faceMesh.scale.copy(avatarBody.scale);
+                    faceMesh.position.copy(avatarBody.position);
+                    faceMesh.rotation.copy(avatarBody.rotation);
+                }
+
+                // Remove old face, add new
+                if (currentFaceMesh) {
+                    scene.remove(currentFaceMesh);
+                }
+                
+                currentFaceMesh = faceMesh;
+                scene.add(currentFaceMesh);
+                currentExpression = name;
+
+                log(`✅ Expression changed to: ${name}`);
+                sendToFlutter({ type: 'expressionChanged', expression: name });
+
+            } catch (error) {
+                log(`❌ Error loading ${name}: ${error.message}`);
+                console.error(error);
             }
-            
-            currentExpression = expressionName;
         }
-        
-        // Expose changeExpression to window for Flutter calls
-        window.changeExpression = morphToExpression;
-        
-        function onWindowResize() {
+
+        async function loadExpressionOBJ(name) {
+            const basePath = CONFIG.expressionsPath + name;
+            
+            return new Promise((resolve, reject) => {
+                // Try loading MTL first
+                mtlLoader.load(
+                    basePath + '.mtl',
+                    (materials) => {
+                        materials.preload();
+                        
+                        // Load textures for materials
+                        Object.values(materials.materials).forEach(mat => {
+                            const tex = textureLoader.load(CONFIG.expressionsPath + name + '1.png');
+                            tex.colorSpace = THREE.SRGBColorSpace;
+                            mat.map = tex;
+                            mat.transparent = true;
+                            mat.alphaTest = 0.5;
+                            mat.side = THREE.DoubleSide;
+                        });
+
+                        objLoader.setMaterials(materials);
+                        objLoader.load(
+                            basePath + '.obj',
+                            (obj) => {
+                                obj.traverse((child) => {
+                                    if (child.isMesh && child.material) {
+                                        child.material.transparent = true;
+                                        child.material.alphaTest = 0.5;
+                                        child.material.depthWrite = true;
+                                    }
+                                });
+                                resolve(obj);
+                            },
+                            undefined, reject
+                        );
+                    },
+                    undefined,
+                    () => {
+                        // MTL failed - load OBJ with manual texture
+                        log(`Loading ${name} without MTL`);
+                        const tex = textureLoader.load(CONFIG.expressionsPath + name + '1.png');
+                        tex.colorSpace = THREE.SRGBColorSpace;
+                        
+                        objLoader.load(
+                            basePath + '.obj',
+                            (obj) => {
+                                obj.traverse((child) => {
+                                    if (child.isMesh) {
+                                        child.material = new THREE.MeshStandardMaterial({
+                                            map: tex,
+                                            transparent: true,
+                                            alphaTest: 0.5,
+                                            side: THREE.DoubleSide
+                                        });
+                                    }
+                                });
+                                resolve(obj);
+                            },
+                            undefined, reject
+                        );
+                    }
+                );
+            });
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+
+        function onResize() {
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
         }
 
-        // Speech bubble functions
-        function showSpeechBubble(text, duration = 5000) {
-            const bubble = document.getElementById('speech-bubble');
-            bubble.textContent = text;
-            bubble.classList.add('active');
-            
-            if (duration > 0) {
-                setTimeout(() => {
-                    bubble.classList.remove('active');
-                }, duration);
-            }
+        function showError(msg) {
+            const el = document.getElementById('error-message');
+            el.textContent = msg;
+            el.style.display = 'block';
+            setTimeout(() => el.style.display = 'none', 5000);
         }
 
-        function hideSpeechBubble() {
-            document.getElementById('speech-bubble').classList.remove('active');
-        }
-
-        // Status functions
-        function setStatus(text, isSpeaking = false) {
-            const badge = document.getElementById('status-badge');
-            badge.textContent = text;
-            if (isSpeaking) {
-                badge.classList.add('speaking');
-            } else {
-                badge.classList.remove('speaking');
-            }
-        }
-
-        // Expression functions
-        function showExpression(name, emoji) {
-            const indicator = document.getElementById('expression-indicator');
-            indicator.textContent = `${emoji} ${name}`;
-            indicator.classList.add('active');
-            setTimeout(() => {
-                indicator.classList.remove('active');
-            }, 2000);
-        }
-
-        // Control functions
-        function toggleMute() {
-            isMuted = !isMuted;
-            // Find the button more reliably
-            const btn = document.querySelector('.control-btn[title="Mute/Unmute"]');
-            if (btn) btn.textContent = isMuted ? '🔇' : '🔊';
-            sendToFlutter({ type: 'mute', muted: isMuted });
-        }
-
-        function startListening() {
-            setStatus('Listening...', true);
-            sendToFlutter({ type: 'listen' });
-        }
-
-        function showMenu() {
-            sendToFlutter({ type: 'menu' });
-        }
-
-        // Error handling
-        function showError(message) {
-            const errorDiv = document.getElementById('error-message');
-            errorDiv.textContent = message;
-            errorDiv.style.display = 'block';
-            setTimeout(() => {
-                errorDiv.style.display = 'none';
-            }, 5000);
-        }
-
-        // Communication with Flutter
         function sendToFlutter(data) {
-            if (window.Flutter) {
-                window.Flutter.postMessage(JSON.stringify(data));
-            }
-            console.log('📱 To Flutter:', data);
+            if (window.Flutter) window.Flutter.postMessage(JSON.stringify(data));
+            log(`→ Flutter: ${JSON.stringify(data)}`);
         }
 
-        // API for Flutter to call
-        window.tutorSpeak = function(text, expression = 'neutral') {
-            console.log('🗣️ Speaking:', text, 'Expression:', expression);
-            
-            isSpeaking = true;
-            setStatus('Speaking', true);
-            showSpeechBubble(text);
-            
-            // Change expression
-            if (expression !== 'neutral') {
-                const emojiMap = {
-                    'smile': '😊',
-                    'happy': '😄',
-                    'sad': '😢',
-                    'thinking': '🤔',
-                    'excited': '🤗',
-                    'surprised': '😮'
-                };
-                showExpression(expression, emojiMap[expression] || '😊');
-                
-                // Call avatar controller if available
-                if (window.changeExpression) {
-                    window.changeExpression(expression);
-                }
-            }
-            
-            // Simulate speech duration
-            const duration = text.length * 50; // 50ms per character
-            setTimeout(() => {
-                isSpeaking = false;
-                setStatus('Ready to help');
-                hideSpeechBubble();
-                sendToFlutter({ type: 'speechComplete' });
-            }, duration);
+        // ============================================================
+        // PUBLIC API
+        // ============================================================
+        
+        window.changeExpression = function(expression) {
+            log(`API: changeExpression("${expression}")`);
+            loadExpression(expression);
         };
 
-        window.tutorSetExpression = function(expression) {
-            console.log('😊 Expression:', expression);
-            currentExpression = expression;
-            if (window.changeExpression) {
-                window.changeExpression(expression);
-            }
+        window.setAvatarGender = function(gender) {
+            log(`API: setAvatarGender("${gender}") - Feature coming soon`);
+            sendToFlutter({ type: 'info', message: 'Avatar customization coming soon!' });
         };
 
-        window.tutorAsk = function(question) {
-            console.log('❓ Question:', question);
-            showSpeechBubble('Thinking...', 1000);
-            setStatus('Processing');
-            
-            // Process question (would connect to your backend/AI)
-            setTimeout(() => {
-                const answer = `Great question! Let me explain...`;
-                window.tutorSpeak(answer, 'smile');
-            }, 1500);
-        };
-
-        // Expose control functions to window for onclick handlers
-        window.toggleMute = toggleMute;
-        window.startListening = startListening;
-        window.showMenu = showMenu;
-
-        // Expose API
         window.eTutorAPI = {
-            speak: window.tutorSpeak,
-            setExpression: window.tutorSetExpression,
-            ask: window.tutorAsk,
-            setStatus: setStatus,
-            showMessage: showSpeechBubble,
-            showError: showError
+            setExpression: (e) => window.changeExpression(e),
+            getExpressions: () => EXPRESSIONS,
+            getCurrent: () => currentExpression,
+            setGender: (g) => window.setAvatarGender(g),
+            isReady: () => !!avatarBody
         };
 
-        console.log('✅ E-Tutor Assistant Mobile Interface Ready');
-        console.log('📱 API available at window.eTutorAPI');
+        log('📱 E-Tutor Avatar API Ready');
     </script>
 </body>
 </html>
