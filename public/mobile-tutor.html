@@ -77,19 +77,19 @@
             scene = new THREE.Scene();
             scene.background = null;
 
-            // Camera - wide FOV, will be positioned after model loads
-            // Using large near plane (100) to completely eliminate z-fighting
-            camera = new THREE.PerspectiveCamera(30, width / height, 100, 10000);
+            // Camera - positioned far back with VERY large near plane
+            // Near=200 eliminates z-fighting completely by clipping before the problem area
+            camera = new THREE.PerspectiveCamera(30, width / height, 200, 10000);
             camera.position.set(0, 150, 500);
             camera.lookAt(0, 150, 0);
 
-            // Renderer - simple settings for mobile compatibility
+            // Renderer with logarithmic depth buffer for better precision
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
                 alpha: true,
                 powerPreference: 'high-performance',
                 precision: 'highp',
-                depth: true
+                logarithmicDepthBuffer: true  // Better depth precision to prevent z-fighting
             });
             renderer.setSize(width, height);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -214,14 +214,14 @@
             const cameraDistance = modelHeight * 2.5; // 2.5x model height away
             const cameraY = box.min.y + modelHeight * 0.75; // Slightly above look point
 
-            // Position camera
+            // Position camera further back to ensure near plane doesn't clip the face
             camera.position.set(center.x, cameraY, center.z + cameraDistance);
             camera.lookAt(center.x, lookAtY, center.z);
             
-            // CRITICAL: Set near plane large enough to prevent z-fighting
-            // Near must be > distance to closest rendered point
-            // With camera at ~275 units away, near=100 gives plenty of margin
-            camera.near = Math.max(100, cameraDistance * 0.3);
+            // CRITICAL: Large near plane (200+) eliminates z-fighting on forehead
+            // The gash is caused by two overlapping surfaces fighting for the same depth
+            // By pushing near plane far out, we improve depth buffer precision significantly
+            camera.near = Math.max(200, cameraDistance * 0.4);
             camera.far = cameraDistance * 5;
             camera.updateProjectionMatrix();
 
