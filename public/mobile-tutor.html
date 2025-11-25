@@ -91,15 +91,14 @@
 
             // Camera - configured for avatar face view
             const aspect = container.clientWidth / container.clientHeight;
-            // Near plane set to 1.0 to prevent z-fighting artifacts (forehead gash)
-            camera = new THREE.PerspectiveCamera(45, aspect, 1.0, 2000);
+            // Near plane set to 10.0 to prevent z-fighting artifacts (forehead gash)
+            camera = new THREE.PerspectiveCamera(45, aspect, 10.0, 5000);
             camera.position.set(0, CAMERA_HEIGHT, CAMERA_DISTANCE);
 
-            // Renderer
+            // Renderer - standard depth buffer works better on mobile WebGL
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
                 alpha: true,
-                logarithmicDepthBuffer: true, // Fix z-fighting/clipping
                 precision: 'highp'
             });
             renderer.setSize(container.clientWidth, container.clientHeight);
