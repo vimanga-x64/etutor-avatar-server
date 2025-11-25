@@ -313,13 +313,41 @@
             findMorphTargetMesh(object) {
                 log('Searching for morph target mesh...');
                 
+                // Known target names from the GLB file (from extras.targetNames)
+                const knownTargetNames = [
+                    'anger', 'closed_smile', 'depress', 'disgust', 'fear', 'frown',
+                    'funny_smile', 'laugh', 'lip_close', 'sad', 'smile', 'surprise',
+                    'b_m_p', 'big_aah', 'ch_j_sh', 'd_s_t', 'ee', 'eh', 'f_v', 'i',
+                    'k', 'n', 'oh', 'ooh_q', 'r', 'small_aah', 'th', 'w'
+                ];
+                
                 object.traverse((child) => {
-                    if (child.isMesh && child.morphTargetDictionary) {
-                        log(`Found mesh with morph targets: ${child.name}`);
-                        log(`Morph targets: ${Object.keys(child.morphTargetDictionary).join(', ')}`);
+                    // Check for mesh with morph target influences
+                    if (child.isMesh && child.morphTargetInfluences && child.morphTargetInfluences.length > 0) {
+                        log(`Found mesh: ${child.name}, influences: ${child.morphTargetInfluences.length}`);
                         
-                        this.headMesh = child;
-                        this.buildMorphTargetMap(child);
+                        // Check if dictionary exists and is populated
+                        if (child.morphTargetDictionary && Object.keys(child.morphTargetDictionary).length > 0) {
+                            log(`Has morphTargetDictionary: ${Object.keys(child.morphTargetDictionary).join(', ')}`);
+                            this.headMesh = child;
+                            this.buildMorphTargetMap(child);
+                        } else {
+                            // Dictionary not populated - manually create it from known names
+                            log('morphTargetDictionary empty - creating from known names');
+                            
+                            // Create dictionary manually
+                            child.morphTargetDictionary = {};
+                            const numInfluences = child.morphTargetInfluences.length;
+                            
+                            for (let i = 0; i < Math.min(numInfluences, knownTargetNames.length); i++) {
+                                child.morphTargetDictionary[knownTargetNames[i]] = i;
+                            }
+                            
+                            log(`Created dictionary with ${Object.keys(child.morphTargetDictionary).length} entries`);
+                            
+                            this.headMesh = child;
+                            this.buildMorphTargetMap(child);
+                        }
                     }
                     
                     // Enhance materials
@@ -338,7 +366,7 @@
                     // List all meshes for debugging
                     object.traverse((child) => {
                         if (child.isMesh) {
-                            log(`Mesh: ${child.name}, hasMorphTargets: ${!!child.morphTargetDictionary}`);
+                            log(`Mesh: ${child.name}, influences: ${child.morphTargetInfluences?.length || 0}`);
                         }
                     });
                 }
@@ -373,13 +401,13 @@
                 }
             }
 
-            setExpression(expressionName, intensity = 1.0) {
+            setExpression(expressionName, intensity = 1.0, immediate = false) {
                 if (!this.headMesh) {
                     log(`Cannot set expression: no morph target mesh found`);
                     return false;
                 }
                 
-                log(`Setting expression: ${expressionName} (intensity: ${intensity})`);
+                log(`Setting expression: ${expressionName} (intensity: ${intensity}, immediate: ${immediate})`);
                 
                 // Reset all target influences to 0
                 this.targetInfluences.fill(0);
@@ -391,6 +419,14 @@
                     // Neutral = all zeros
                     log('Setting neutral expression (all zeros)');
                     this.currentExpression = 'neutral';
+                    
+                    if (immediate) {
+                        // Immediately set all influences to 0
+                        for (let i = 0; i < this.headMesh.morphTargetInfluences.length; i++) {
+                            this.headMesh.morphTargetInfluences[i] = 0;
+                            this.currentInfluences[i] = 0;
+                        }
+                    }
                     return true;
                 }
                 
@@ -415,16 +451,42 @@
                 }
                 
                 if (targetIndex !== undefined) {
-                    this.targetInfluences[targetIndex] = Math.min(1, Math.max(0, intensity));
+                    const clampedIntensity = Math.min(1, Math.max(0, intensity));
+                    this.targetInfluences[targetIndex] = clampedIntensity;
                     this.currentExpression = expressionName;
-                    this.expressionIntensity = intensity;
-                    log(`Expression ${expressionName} -> morph index ${targetIndex} = ${intensity}`);
+                    this.expressionIntensity = clampedIntensity;
+                    
+                    if (immediate) {
+                        // Immediately apply the expression
+                        for (let i = 0; i < this.headMesh.morphTargetInfluences.length; i++) {
+                            this.headMesh.morphTargetInfluences[i] = this.targetInfluences[i];
+                            this.currentInfluences[i] = this.targetInfluences[i];
+                        }
+                        log(`IMMEDIATE: Set morph ${targetIndex} to ${clampedIntensity}`);
+                    }
+                    
+                    log(`Expression ${expressionName} -> morph index ${targetIndex} = ${clampedIntensity}`);
                     return true;
                 } else {
                     log(`Expression "${expressionName}" (mapped: "${mappedName}") not found in morph targets`);
                     log(`Available: ${Object.keys(this.morphTargetMap).join(', ')}`);
                     return false;
                 }
+            }
+            
+            // Direct test function to verify morph targets work
+            testMorphTarget(index, value) {
+                if (!this.headMesh) {
+                    log('No head mesh');
+                    return false;
+                }
+                
+                if (index >= 0 && index < this.headMesh.morphTargetInfluences.length) {
+                    this.headMesh.morphTargetInfluences[index] = value;
+                    log(`TEST: Set morphTargetInfluences[${index}] = ${value}`);
+                    return true;
+                }
+                return false;
             }
 
             updateMorphTargets(deltaTime) {
@@ -629,6 +691,34 @@
                 }
             },
             
+            // Set expression with immediate option
+            setExpressionImmediate: (name, intensity = 1.0) => {
+                if (avatarController) {
+                    return avatarController.setExpression(name, intensity, true);
+                }
+                return false;
+            },
+            
+            // Direct morph target test
+            testMorph: (index, value) => {
+                if (avatarController) {
+                    return avatarController.testMorphTarget(index, value);
+                }
+                return false;
+            },
+            
+            // Get all morph target info
+            getMorphInfo: () => {
+                if (avatarController && avatarController.headMesh) {
+                    return {
+                        dictionary: avatarController.morphTargetMap,
+                        influences: Array.from(avatarController.headMesh.morphTargetInfluences || []),
+                        count: avatarController.headMesh.morphTargetInfluences?.length || 0
+                    };
+                }
+                return null;
+            },
+            
             debug: () => {
                 if (avatarController && avatarController.headMesh) {
                     const info = {
@@ -653,7 +743,8 @@
                 
                 switch (data.type) {
                     case 'setExpression':
-                        window.AvatarAPI.setExpression(data.expression, data.intensity || 1.0);
+                        // Use immediate mode for snappier response
+                        window.AvatarAPI.setExpressionImmediate(data.expression, data.intensity || 1.0);
                         break;
                     case 'speak':
                         window.AvatarAPI.speak(data.text, data.options || {});
@@ -666,6 +757,9 @@
                         break;
                     case 'debug':
                         window.AvatarAPI.debug();
+                        break;
+                    case 'testMorph':
+                        window.AvatarAPI.testMorph(data.index, data.value);
                         break;
                 }
             } catch (e) {
