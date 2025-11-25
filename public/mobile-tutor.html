@@ -97,10 +97,12 @@
             // Renderer
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
-                alpha: true
+                alpha: true,
+                logarithmicDepthBuffer: true, // Fix z-fighting/clipping
+                precision: 'highp'
             });
             renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.setPixelRatio(1); // Reduce load for mobile
             renderer.outputEncoding = THREE.sRGBEncoding;
             container.appendChild(renderer.domElement);
 
@@ -137,7 +139,9 @@
             // Use 0.25 to focus more on face center (lower than before)
             const faceTargetY = center.y + (size.y * 0.25);
 
-            controls.target.set(0, faceTargetY, 0);
+            // Look LOWER (subtract Y) to make the avatar appear HIGHER in the frame
+            const targetY = faceTargetY - 35;
+            controls.target.set(0, targetY, 0);
 
             // 2. Calculate Distance required to fit the head vertically
             const headSize = size.y * 0.25;
@@ -147,12 +151,12 @@
             let distance = Math.abs(headSize / Math.tan(fov / 2));
 
             // 3. Apply a "Zoom Out" factor
-            // Increased to 3.2 to prevent forehead clipping
-            const zoomOutFactor = 3.2;
+            // Increased to 4.0 to prevent forehead clipping and show more torso
+            const zoomOutFactor = 4.0;
 
-            // Position camera directly in front, no vertical offset to ensure centering
+            // Position camera directly in front
             camera.position.set(0, faceTargetY, distance * zoomOutFactor);
-            camera.lookAt(0, faceTargetY, 0);
+            camera.lookAt(0, targetY, 0);
 
             // Update control limits based on calculated distance
             controls.minDistance = distance * 0.5;
@@ -201,6 +205,8 @@
                                 mats.forEach(mat => {
                                     if (mat.map) mat.map.generateMipmaps = false;
                                     if (mat.normalMap) mat.normalMap.generateMipmaps = false;
+                                    // Ensure morph targets are enabled
+                                    mat.morphTargets = true;
                                     mat.needsUpdate = true;
                                 });
                             }
@@ -310,7 +316,6 @@
                 }
             });
 
-            // Apply new expression if not neutral
             // Apply new expression if not neutral
             if (targetName) {
                 let applied = false;
