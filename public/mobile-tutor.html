@@ -135,23 +135,42 @@
                     avatar.traverse(function(node) {
                         if (node.isMesh) {
                             // =====================================================
-                            // FIX FOR FOREHEAD GASH - Apply polygon offset to ALL meshes
-                            // This pushes back-facing polygons slightly behind front-facing
-                            // preventing z-fighting where surfaces overlap
+                            // PERMANENT FIX FOR FOREHEAD GASH
+                            // The gash is caused by hair mesh (normal_3) z-fighting with
+                            // the face/head mesh. We fix by:
+                            // 1. Moving hair mesh slightly backward in local Z
+                            // 2. Setting render order so face renders on top
                             // =====================================================
+                            
+                            const isHairMesh = node.name.includes('3') || 
+                                               (node.material && node.material.name && 
+                                                node.material.name.includes('3'));
+                            
+                            if (isHairMesh) {
+                                // Push hair back slightly to prevent overlap with face
+                                node.position.z -= 0.5;
+                                node.renderOrder = 0; // Hair renders first (behind)
+                                console.log('Hair mesh adjusted:', node.name);
+                            } else {
+                                node.renderOrder = 1; // Face renders second (in front)
+                            }
+                            
                             if (node.material) {
                                 const materials = Array.isArray(node.material) ? node.material : [node.material];
-                                materials.forEach(mat => {
-                                    // Enable polygon offset to prevent z-fighting
-                                    mat.polygonOffset = true;
-                                    mat.polygonOffsetFactor = 1;
-                                    mat.polygonOffsetUnits = 1;
+                                materials.forEach((mat, idx) => {
+                                    // Texture3 is typically hair - push it back
+                                    if (mat.name === 'Texture3') {
+                                        mat.polygonOffset = true;
+                                        mat.polygonOffsetFactor = 4;  // Strong offset for hair
+                                        mat.polygonOffsetUnits = 4;
+                                        console.log('Hair material offset applied');
+                                    } else {
+                                        // Face materials - no offset, render on top
+                                        mat.polygonOffset = false;
+                                    }
                                     
-                                    // Ensure proper depth testing
                                     mat.depthTest = true;
                                     mat.depthWrite = true;
-                                    
-                                    // Enable morphing for r128
                                     mat.morphTargets = true;
                                     mat.morphNormals = true;
                                     mat.needsUpdate = true;
