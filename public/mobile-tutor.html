@@ -1,123 +1,110 @@
 <!DOCTYPE html>
-<html lang="en">
-
+<html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>E-Tutor Avatar</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-
-        html,
-        body {
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { 
+            width: 100%; height: 100%; 
+            overflow: hidden; 
             background: transparent;
+            touch-action: none;
         }
-
-        #avatar-container {
-            width: 100%;
-            height: 100%;
+        #canvas-container { 
+            width: 100%; height: 100%; 
+            position: absolute; 
+            top: 0; left: 0;
         }
-
         #loading {
             position: absolute;
-            top: 50%;
-            left: 50%;
+            top: 50%; left: 50%;
             transform: translate(-50%, -50%);
-            color: #6366f1;
-            font-family: sans-serif;
-            text-align: center;
+            color: #666;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            z-index: 100;
         }
-
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid rgba(99, 102, 241, 0.2);
-            border-top-color: #6366f1;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-
-        @keyframes spin {
-            to {
-                transform: rotate(360deg);
-            }
-        }
+        canvas { display: block; }
     </style>
 </head>
-
 <body>
-    <div id="avatar-container">
-        <div id="loading">
-            <div class="spinner"></div>
-            Loading Avatar...
-        </div>
-    </div>
+    <div id="canvas-container"></div>
+    <div id="loading">Loading Avatar...</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/three@0.137.0/build/three.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/loaders/GLTFLoader.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/three@0.137.0/examples/js/controls/OrbitControls.js"></script>
+    <!-- Three.js r128 - better morph target support on mobile WebGL -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 
     <script>
-        // ============================================================
-        // SIMPLE AVATAR CONTROLLER - Matching original implementation
-        // ============================================================
+        // ============================================
+        // GLOBALS
+        // ============================================
+        let scene, camera, renderer, avatar;
+        let morphMeshes = [];
+        let isReady = false;
+        let clock = new THREE.Clock();
+        
+        // ============================================
+        // EXPRESSION MAPPING - direct to GLB morph names
+        // ============================================
+        const EXPRESSIONS = {
+            'smile': ['smile'],
+            'happy': ['smile', 'laugh'],
+            'laugh': ['laugh'],
+            'sad': ['sad'],
+            'anger': ['anger'],
+            'angry': ['anger'],
+            'fear': ['fear'],
+            'surprise': ['surprise'],
+            'surprised': ['surprise'],
+            'disgust': ['disgust'],
+            'frown': ['frown'],
+            'neutral': [],
+            'normal': []
+        };
 
-        let scene, camera, renderer, controls;
-        let avatarGroup, morphMeshes = [];
-        let morphTargetMap = {};
-        let currentExpression = 'normal';
-        let mixer, clock;
-
-        // Camera settings - zoomed out to show full face
-        const CAMERA_DISTANCE = 600;  // Much closer Z for this model scale
-        const CAMERA_HEIGHT = 165;   // Eye level height
-        const LOOK_AT_HEIGHT = 160;  // Look at face center
-
+        // ============================================
+        // INITIALIZATION
+        // ============================================
         function init() {
-            const container = document.getElementById('avatar-container');
-            clock = new THREE.Clock();
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth || window.innerWidth;
+            const height = container.clientHeight || window.innerHeight;
 
-            // Scene
+            // Scene with transparent background
             scene = new THREE.Scene();
             scene.background = null;
 
-            // Camera - configured for avatar face view
-            const aspect = container.clientWidth / container.clientHeight;
-            // Near plane set to 10.0 to prevent z-fighting artifacts (forehead gash)
-            camera = new THREE.PerspectiveCamera(45, aspect, 10.0, 5000);
-            camera.position.set(0, CAMERA_HEIGHT, CAMERA_DISTANCE);
+            // Camera - CRITICAL: near=50 to prevent z-fighting on forehead
+            camera = new THREE.PerspectiveCamera(25, width / height, 50, 5000);
+            camera.position.set(0, 55, 400);
+            camera.lookAt(0, 55, 0);
 
-            // Renderer - standard depth buffer works better on mobile WebGL
+            // Renderer - simple settings for mobile compatibility
             renderer = new THREE.WebGLRenderer({
                 antialias: true,
                 alpha: true,
-                precision: 'highp'
+                powerPreference: 'high-performance'
             });
-            renderer.setSize(container.clientWidth, container.clientHeight);
-            renderer.setPixelRatio(1); // Reduce load for mobile
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.setClearColor(0x000000, 0);
             container.appendChild(renderer.domElement);
 
-            // Controls
-            controls = new THREE.OrbitControls(camera, renderer.domElement);
-            controls.target.set(0, LOOK_AT_HEIGHT, 0);
-            controls.enableDamping = true;
-            controls.dampingFactor = 0.05;
-            controls.minDistance = 30;
-            controls.maxDistance = 200;
-            controls.enablePan = false;
-            controls.update();
+            // Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
 
-            // Lighting - matching original
-            setupLighting();
+            const frontLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            frontLight.position.set(0, 100, 200);
+            scene.add(frontLight);
+
+            const fillLight = new THREE.DirectionalLight(0xffffff, 0.4);
+            fillLight.position.set(-100, 50, 100);
+            scene.add(fillLight);
 
             // Load avatar
             loadAvatar();
@@ -129,356 +116,251 @@
             animate();
         }
 
-        // Auto-fit camera to avatar head/face
-        function fitCameraToHead(object) {
-            const box = new THREE.Box3().setFromObject(object);
-            const size = box.getSize(new THREE.Vector3());
-            const center = box.getCenter(new THREE.Vector3());
-
-            // 1. Determine where the "Face" is - center on the face, not top of head
-            // Use 0.25 to focus more on face center (lower than before)
-            const faceTargetY = center.y + (size.y * 0.25);
-
-            // Look LOWER (subtract Y) to make the avatar appear HIGHER in the frame
-            const targetY = faceTargetY - 35;
-            controls.target.set(0, targetY, 0);
-
-            // 2. Calculate Distance required to fit the head vertically
-            const headSize = size.y * 0.25;
-
-            // Calculate distance based on Field of View
-            const fov = camera.fov * (Math.PI / 180);
-            let distance = Math.abs(headSize / Math.tan(fov / 2));
-
-            // 3. Apply a "Zoom Out" factor
-            // Increased to 4.0 to prevent forehead clipping and show more torso
-            const zoomOutFactor = 4.0;
-
-            // Position camera directly in front
-            camera.position.set(0, faceTargetY, distance * zoomOutFactor);
-            camera.lookAt(0, targetY, 0);
-
-            // Update control limits based on calculated distance
-            controls.minDistance = distance * 0.5;
-            controls.maxDistance = distance * 5;
-            controls.update();
-
-            console.log('Camera auto-fit: faceY=' + faceTargetY.toFixed(1) + ', distance=' + (distance * zoomOutFactor).toFixed(1));
-        }
-
-        function setupLighting() {
-            // Ambient
-            const ambient = new THREE.AmbientLight(0xffffff, 0.4);
-            scene.add(ambient);
-
-            // Key light
-            const keyLight = new THREE.DirectionalLight(0xffffff, 1.0);
-            keyLight.position.set(100, 200, 100);
-            scene.add(keyLight);
-
-            // Fill light
-            const fillLight = new THREE.DirectionalLight(0xffffff, 0.5);
-            fillLight.position.set(-100, 150, 50);
-            scene.add(fillLight);
-
-            // Back light
-            const backLight = new THREE.DirectionalLight(0xffffff, 0.3);
-            backLight.position.set(0, 100, -100);
-            scene.add(backLight);
-        }
-
+        // ============================================
+        // AVATAR LOADING
+        // ============================================
         function loadAvatar() {
             const loader = new THREE.GLTFLoader();
+            const modelUrl = 'models/avatar_female.glb';
 
             loader.load(
-                '/models/avatar_female.glb',
-                (gltf) => {
-                    console.log('Avatar loaded');
-                    avatarGroup = gltf.scene;
-
+                modelUrl,
+                function(gltf) {
+                    avatar = gltf.scene;
+                    
                     // Find all meshes with morph targets
-                    avatarGroup.traverse((child) => {
-                        if (child.isMesh) {
-                            // Fix materials for mobile
-                            if (child.material) {
-                                const mats = Array.isArray(child.material) ? child.material : [child.material];
-                                mats.forEach(mat => {
-                                    if (mat.map) mat.map.generateMipmaps = false;
-                                    if (mat.normalMap) mat.normalMap.generateMipmaps = false;
-                                    mat.needsUpdate = true;
-                                });
-                            }
-
-                            // Collect morphable meshes
-                            if (child.morphTargetDictionary && child.morphTargetInfluences) {
-                                morphMeshes.push(child);
-                                // Ensure morph target influences array exists and is right size
-                                const morphCount = Object.keys(child.morphTargetDictionary).length;
-                                if (!child.morphTargetInfluences || child.morphTargetInfluences.length !== morphCount) {
-                                    child.morphTargetInfluences = new Float32Array(morphCount);
-                                }
-                                console.log('Found morph mesh:', child.name, Object.keys(child.morphTargetDictionary));
-
-                                // Build map from first mesh
-                                if (Object.keys(morphTargetMap).length === 0) {
-                                    morphTargetMap = { ...child.morphTargetDictionary };
+                    avatar.traverse(function(node) {
+                        if (node.isMesh && node.morphTargetInfluences && node.morphTargetDictionary) {
+                            console.log('Found morph mesh:', node.name, Object.keys(node.morphTargetDictionary).join(','));
+                            
+                            // CRITICAL: Enable morphing on material for r128
+                            if (node.material) {
+                                if (Array.isArray(node.material)) {
+                                    node.material.forEach(mat => {
+                                        mat.morphTargets = true;
+                                        mat.morphNormals = true;
+                                        mat.needsUpdate = true;
+                                    });
+                                } else {
+                                    node.material.morphTargets = true;
+                                    node.material.morphNormals = true;
+                                    node.material.needsUpdate = true;
                                 }
                             }
+                            
+                            // Initialize morph influences to 0
+                            for (let i = 0; i < node.morphTargetInfluences.length; i++) {
+                                node.morphTargetInfluences[i] = 0;
+                            }
+                            
+                            morphMeshes.push(node);
                         }
                     });
 
-                    scene.add(avatarGroup);
+                    scene.add(avatar);
+                    console.log('Avatar loaded with', morphMeshes.length, 'morph meshes');
 
-                    // Setup animations
-                    if (gltf.animations && gltf.animations.length > 0) {
-                        mixer = new THREE.AnimationMixer(avatarGroup);
-                        const idle = gltf.animations[0];
-                        if (idle) {
-                            mixer.clipAction(idle).play();
-                        }
-                    }
-
-                    // Auto-fit camera to avatar head
-                    fitCameraToHead(avatarGroup);
+                    // Position camera to frame head
+                    fitCameraToHead();
 
                     // Hide loading
                     document.getElementById('loading').style.display = 'none';
+                    
+                    isReady = true;
+                    console.log('Avatar ready');
 
-                    // Set neutral expression
-                    setExpression('normal');
-
-                    // Welcome message after a short delay
-                    setTimeout(() => {
-                        welcomeStudent();
-                    }, 1000);
-
-                    console.log('Avatar ready with', morphMeshes.length, 'morph meshes');
+                    // Signal ready to Flutter
+                    if (window.FlutterChannel) {
+                        window.FlutterChannel.postMessage('ready');
+                    }
                 },
-                (progress) => {
-                    const pct = Math.round((progress.loaded / progress.total) * 100);
-                    console.log('Loading:', pct + '%');
+                function(progress) {
+                    if (progress.total > 0) {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        document.getElementById('loading').textContent = 'Loading: ' + percent + '%';
+                    }
                 },
-                (error) => {
-                    console.error('Load error:', error);
+                function(error) {
+                    console.error('Error loading avatar:', error);
+                    document.getElementById('loading').textContent = 'Error loading avatar';
                 }
             );
         }
 
-        function setExpression(name, intensity = 1.0) {
-            console.log('=== setExpression called ===', name, 'intensity:', intensity);
-            console.log('morphMeshes count:', morphMeshes.length);
+        // ============================================
+        // CAMERA POSITIONING
+        // ============================================
+        function fitCameraToHead() {
+            if (!avatar) return;
 
-            if (morphMeshes.length === 0) {
-                console.error('ERROR: No morph meshes available!');
-                return;
+            const box = new THREE.Box3().setFromObject(avatar);
+            const size = box.getSize(new THREE.Vector3());
+            const center = box.getCenter(new THREE.Vector3());
+
+            // Estimate head position (top 15% of model)
+            const headY = box.min.y + size.y * 0.85;
+            
+            // Calculate distance for head framing
+            const fov = camera.fov * (Math.PI / 180);
+            const headSize = size.y * 0.15;
+            const distance = (headSize / 2) / Math.tan(fov / 2) * 2.5;
+
+            camera.position.set(center.x, headY, center.z + distance);
+            camera.lookAt(center.x, headY, center.z);
+            
+            // Update near/far based on distance - KEEP near at 50 minimum
+            camera.near = Math.max(50, distance * 0.1);
+            camera.far = distance * 10;
+            camera.updateProjectionMatrix();
+
+            console.log('Camera positioned: headY=' + headY.toFixed(1) + ', distance=' + distance.toFixed(1) + ', near=' + camera.near);
+        }
+
+        // ============================================
+        // EXPRESSION CONTROL - THE CORE FIX
+        // ============================================
+        function setExpression(expressionName, intensity) {
+            intensity = intensity !== undefined ? intensity : 1.0;
+            console.log('=== setExpression:', expressionName, 'intensity:', intensity, '===');
+            
+            if (!isReady) {
+                console.warn('Avatar not ready yet');
+                return false;
             }
 
-            // Map expression names to morph target names
-            // Added standard ARKit blendshapes as fallbacks
-            const expressionMap = {
-                'normal': null,
-                'neutral': null,
-                'smile': ['smile', 'mouthSmile', 'mouthSmileLeft', 'mouthSmileRight'],
-                'laugh': ['laugh', 'jawOpen', 'mouthSmile'],
-                'sad': ['sad', 'mouthFrownLeft', 'mouthFrownRight', 'browDownLeft', 'browDownRight'],
-                'anger': ['anger', 'browDownLeft', 'browDownRight', 'mouthFrownLeft', 'mouthFrownRight', 'jawForward'],
-                'angry': ['anger', 'browDownLeft', 'browDownRight'],
-                'surprise': ['surprise', 'jawOpen', 'browInnerUp', 'browOuterUpLeft', 'browOuterUpRight'],
-                'surprised': ['surprise', 'jawOpen'],
-                'frown': ['frown', 'mouthFrownLeft', 'mouthFrownRight'],
-                'fear': ['fear', 'eyeWideLeft', 'eyeWideRight', 'mouthFrownLeft', 'mouthFrownRight'],
-                'disgust': ['disgust', 'noseSneerLeft', 'noseSneerRight', 'mouthFrownLeft', 'mouthFrownRight'],
-                'depress': ['depress', 'mouthFrownLeft', 'mouthFrownRight'],
-                'closed_smile': ['closed_smile', 'mouthSmile'],
-                'funny_smile': ['funny_smile', 'mouthSmile', 'eyeSquintLeft', 'eyeSquintRight'],
-                'happy': ['smile', 'mouthSmile'],
-                'thinking': ['frown', 'browInnerUp'],
-                'confused': ['frown', 'browInnerUp', 'jawLeft'],
-                'encouraging': ['closed_smile', 'mouthSmile'],
-                'proud': ['funny_smile', 'mouthSmile'],
-                'concerned': ['depress', 'browDownLeft', 'browDownRight'],
-                'excited': ['laugh', 'jawOpen', 'mouthSmile'],
-                'calm': ['closed_smile', 'mouthSmile'],
-                'curious': ['surprise', 'browInnerUp']
-            };
+            if (morphMeshes.length === 0) {
+                console.error('No morph meshes available!');
+                return false;
+            }
 
-            const targetName = expressionMap[name.toLowerCase()];
-            console.log('Mapped expression:', name, '->', targetName);
+            // Get target morphs for this expression
+            const lowerExpr = expressionName.toLowerCase();
+            const targetMorphs = EXPRESSIONS[lowerExpr] || [lowerExpr];
+            
+            console.log('Target morphs for', expressionName + ':', targetMorphs.join(', '));
 
-            // Reset ALL expression morph targets on all meshes first
-            const expressionMorphs = ['anger', 'closed_smile', 'depress', 'disgust', 'fear', 'frown', 'funny_smile', 'laugh', 'lip_close', 'sad', 'smile', 'surprise'];
+            let success = false;
 
+            // Apply to each morph mesh
             morphMeshes.forEach((mesh, meshIdx) => {
-                if (mesh.morphTargetInfluences && mesh.morphTargetDictionary) {
-                    expressionMorphs.forEach(morphName => {
-                        const idx = mesh.morphTargetDictionary[morphName];
+                const influences = mesh.morphTargetInfluences;
+                const dictionary = mesh.morphTargetDictionary;
+
+                if (!influences || !dictionary) {
+                    console.warn('Mesh', mesh.name, 'missing morph data');
+                    return;
+                }
+
+                // Reset all morphs first
+                for (let i = 0; i < influences.length; i++) {
+                    influences[i] = 0;
+                }
+
+                // Apply target morphs
+                if (targetMorphs.length > 0) {
+                    targetMorphs.forEach(morphName => {
+                        const idx = dictionary[morphName];
                         if (idx !== undefined) {
-                            mesh.morphTargetInfluences[idx] = 0;
+                            influences[idx] = intensity;
+                            console.log('Applied', morphName, '=', intensity, 'on', mesh.name, 'idx=' + idx);
+                            success = true;
                         }
                     });
+                }
+
+                // CRITICAL: Force geometry update for morph to render
+                if (mesh.geometry) {
+                    mesh.geometry.attributes.position.needsUpdate = true;
+                    if (mesh.geometry.attributes.normal) {
+                        mesh.geometry.attributes.normal.needsUpdate = true;
+                    }
                 }
             });
 
-            // Apply new expression if not neutral
-            if (targetName) {
-                let applied = false;
-                // Handle array of potential targets (priority list)
-                const targets = Array.isArray(targetName) ? targetName : [targetName];
-
-                morphMeshes.forEach((mesh, meshIdx) => {
-                    if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
-                        // Try to find the first matching target in the list
-                        let foundTarget = null;
-                        for (const t of targets) {
-                            if (mesh.morphTargetDictionary[t] !== undefined) {
-                                foundTarget = t;
-                                break;
-                            }
-                        }
-
-                        if (foundTarget) {
-                            const idx = mesh.morphTargetDictionary[foundTarget];
-                            mesh.morphTargetInfluences[idx] = intensity;
-                            // Force geometry update for morph targets
-                            if (mesh.geometry) {
-                                mesh.geometry.attributes.position.needsUpdate = true;
-                            }
-                            console.log('SUCCESS: Applied', foundTarget, 'idx=' + idx, 'on mesh[' + meshIdx + ']', mesh.name);
-                            applied = true;
-                        }
-                    }
-                });
-                if (!applied) {
-                    console.error('FAILED: Could not find any morph targets:', targets);
-                    console.log('Available targets:', Object.keys(morphTargetMap));
-                }
-            } else {
-                console.log('Expression reset to neutral');
+            // Force a render
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
             }
 
-            currentExpression = name;
+            console.log('Expression result:', success ? 'SUCCESS' : 'NO MATCH FOUND');
+            return success;
         }
 
-        function welcomeStudent() {
-            // Smile and speak welcome message
-            setExpression('smile');
-            speak("Hello! I'm your E-Tutor assistant. Welcome to your learning session!");
-
-            // Return to neutral after speaking
-            setTimeout(() => {
-                setExpression('normal');
-            }, 4000);
-        }
-
-        function speak(text, options = {}) {
-            if (!('speechSynthesis' in window)) {
-                console.log('TTS not supported');
-                return;
-            }
-
-            // Cancel any ongoing speech
-            speechSynthesis.cancel();
-
-            const utterance = new SpeechSynthesisUtterance(text);
-            utterance.rate = options.rate || 0.9;
-            utterance.pitch = options.pitch || 1.0;
-            utterance.volume = options.volume || 1.0;
-
-            // Simple lip animation
-            const lipIndex = morphTargetMap['lip_close'] || morphTargetMap['b_m_p'];
-
-            if (lipIndex !== undefined) {
-                // Animate lips while speaking
-                let animating = true;
-                const animateLips = () => {
-                    if (!animating) return;
-                    const value = Math.sin(Date.now() * 0.015) * 0.3 + 0.3;
-                    morphMeshes.forEach(mesh => {
-                        if (mesh.morphTargetInfluences[lipIndex] !== undefined) {
-                            mesh.morphTargetInfluences[lipIndex] = value;
-                        }
-                    });
-                    requestAnimationFrame(animateLips);
-                };
-                animateLips();
-
-                utterance.onend = () => {
-                    animating = false;
-                    morphMeshes.forEach(mesh => {
-                        if (mesh.morphTargetInfluences[lipIndex] !== undefined) {
-                            mesh.morphTargetInfluences[lipIndex] = 0;
-                        }
-                    });
-                };
-            }
-
-            speechSynthesis.speak(utterance);
-        }
-
-        function onResize() {
-            const container = document.getElementById('avatar-container');
-            camera.aspect = container.clientWidth / container.clientHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(container.clientWidth, container.clientHeight);
-        }
-
+        // ============================================
+        // ANIMATION LOOP
+        // ============================================
         function animate() {
             requestAnimationFrame(animate);
-
-            const delta = clock.getDelta();
-            if (mixer) mixer.update(delta);
-            if (controls) controls.update();
-
-            renderer.render(scene, camera);
+            
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
         }
 
-        // ============================================================
-        // GLOBAL API FOR FLUTTER - Must be defined before init()
-        // ============================================================
-        window.changeExpression = function (name, intensity) {
-            console.log('window.changeExpression called:', name);
-            setExpression(name, intensity || 1.0);
+        // ============================================
+        // RESIZE HANDLER
+        // ============================================
+        function onResize() {
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth || window.innerWidth;
+            const height = container.clientHeight || window.innerHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        // ============================================
+        // FLUTTER INTERFACE
+        // ============================================
+        window.changeExpression = function(expression) {
+            console.log('Flutter called changeExpression:', expression);
+            return setExpression(expression, 1.0);
         };
 
-        window.speak = speak;
+        window.setExpressionIntensity = function(expression, intensity) {
+            console.log('Flutter called setExpressionIntensity:', expression, intensity);
+            return setExpression(expression, intensity);
+        };
+
+        window.speakText = function(text) {
+            console.log('Flutter called speakText:', text);
+            // TTS handled by Flutter native
+            return true;
+        };
+
+        window.welcomeStudent = function(name) {
+            console.log('Flutter called welcomeStudent:', name);
+            setExpression('smile', 1.0);
+            return true;
+        };
+
+        window.isAvatarReady = function() {
+            return isReady && morphMeshes.length > 0;
+        };
+
+        window.getMorphNames = function() {
+            if (morphMeshes.length > 0 && morphMeshes[0].morphTargetDictionary) {
+                return Object.keys(morphMeshes[0].morphTargetDictionary);
+            }
+            return [];
+        };
 
         window.AvatarAPI = {
-            setExpression: function (name, intensity) {
-                setExpression(name, intensity || 1.0);
-            },
-            setExpressionImmediate: function (name, intensity) {
-                setExpression(name, intensity || 1.0);
-            },
-            speak: speak,
-            isReady: () => morphMeshes.length > 0,
-            getExpressions: () => Object.keys(morphTargetMap).slice(0, 12),
-            welcomeStudent: welcomeStudent,
-            testSmile: function () {
-                console.log('Testing smile expression...');
-                setExpression('smile', 1.0);
-            },
-            testMorph: function (index, value) {
-                morphMeshes.forEach(mesh => {
-                    if (mesh.morphTargetInfluences && mesh.morphTargetInfluences[index] !== undefined) {
-                        mesh.morphTargetInfluences[index] = value;
-                    }
-                });
-            },
-            getMorphInfo: function () {
-                if (morphMeshes.length === 0) return null;
-                // Return info from first mesh
-                const mesh = morphMeshes[0];
-                return {
-                    count: mesh.morphTargetInfluences.length,
-                    dictionary: mesh.morphTargetDictionary,
-                    influences: Array.from(mesh.morphTargetInfluences)
-                };
+            setExpression: setExpression,
+            isReady: function() { return isReady && morphMeshes.length > 0; },
+            getMorphNames: function() {
+                if (morphMeshes.length > 0 && morphMeshes[0].morphTargetDictionary) {
+                    return Object.keys(morphMeshes[0].morphTargetDictionary);
+                }
+                return [];
             }
         };
 
-        // Initialize
-        init();
+        // ============================================
+        // START
+        // ============================================
+        window.addEventListener('DOMContentLoaded', init);
     </script>
 </body>
-
 </html>
