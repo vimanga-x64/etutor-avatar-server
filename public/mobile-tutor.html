@@ -118,14 +118,13 @@
             const center = box.getCenter(new THREE.Vector3());
 
             // 1. Determine where the "Face" is
-            // Shift target Y up to focus on the upper portion of the model
-            const faceTargetY = center.y + (size.y * 0.35);
+            // Use center.y + 0.30 to focus on face (slightly lower than before)
+            const faceTargetY = center.y + (size.y * 0.30);
             
             controls.target.set(0, faceTargetY, 0);
             camera.lookAt(0, faceTargetY, 0);
 
             // 2. Calculate Distance required to fit the head vertically
-            // Estimate head size is roughly 1/4th of the total height
             const headSize = size.y * 0.25;
             
             // Calculate distance based on Field of View
@@ -133,10 +132,12 @@
             let distance = Math.abs(headSize / Math.tan(fov / 2));
 
             // 3. Apply a "Zoom Out" factor
-            // Increase this number to move camera further back
             const zoomOutFactor = 2.5;
             
             camera.position.set(0, faceTargetY, distance * zoomOutFactor);
+            
+            // 4. Move the avatar model slightly forward (negative Z) to hide forehead seam
+            object.position.z = -5;
             
             // Update control limits based on calculated distance
             controls.minDistance = distance * 0.5;
@@ -240,8 +241,11 @@
         }
         
         function setExpression(name, intensity = 1.0) {
+            console.log('=== setExpression called ===' , name, 'intensity:', intensity);
+            console.log('morphMeshes count:', morphMeshes.length);
+            
             if (morphMeshes.length === 0) {
-                console.log('No morph meshes available yet');
+                console.error('ERROR: No morph meshes available!');
                 return;
             }
             
@@ -274,16 +278,16 @@
             };
             
             const targetName = expressionMap[name.toLowerCase()];
-            console.log('setExpression called:', name, '-> targetName:', targetName);
+            console.log('Mapped expression:', name, '->', targetName);
             
-            // Reset ALL morph targets on all meshes first
-            morphMeshes.forEach(mesh => {
-                if (mesh.morphTargetInfluences) {
-                    // Reset only expression morphs (first 12), not visemes
-                    const expressionMorphs = ['anger', 'closed_smile', 'depress', 'disgust', 'fear', 'frown', 'funny_smile', 'laugh', 'lip_close', 'sad', 'smile', 'surprise'];
+            // Reset ALL expression morph targets on all meshes first
+            const expressionMorphs = ['anger', 'closed_smile', 'depress', 'disgust', 'fear', 'frown', 'funny_smile', 'laugh', 'lip_close', 'sad', 'smile', 'surprise'];
+            
+            morphMeshes.forEach((mesh, meshIdx) => {
+                if (mesh.morphTargetInfluences && mesh.morphTargetDictionary) {
                     expressionMorphs.forEach(morphName => {
-                        if (mesh.morphTargetDictionary && mesh.morphTargetDictionary[morphName] !== undefined) {
-                            const idx = mesh.morphTargetDictionary[morphName];
+                        const idx = mesh.morphTargetDictionary[morphName];
+                        if (idx !== undefined) {
                             mesh.morphTargetInfluences[idx] = 0;
                         }
                     });
@@ -292,15 +296,22 @@
             
             // Apply new expression if not neutral
             if (targetName) {
-                morphMeshes.forEach(mesh => {
-                    if (mesh.morphTargetDictionary && mesh.morphTargetDictionary[targetName] !== undefined) {
+                let applied = false;
+                morphMeshes.forEach((mesh, meshIdx) => {
+                    if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) {
                         const idx = mesh.morphTargetDictionary[targetName];
-                        mesh.morphTargetInfluences[idx] = intensity;
-                        console.log('Applied', targetName, 'at index', idx, 'on mesh', mesh.name, 'intensity:', intensity);
+                        if (idx !== undefined) {
+                            mesh.morphTargetInfluences[idx] = intensity;
+                            console.log('SUCCESS: Applied', targetName, 'idx=' + idx, 'on mesh[' + meshIdx + ']', mesh.name);
+                            applied = true;
+                        }
                     }
                 });
+                if (!applied) {
+                    console.error('FAILED: Could not find morph target:', targetName);
+                }
             } else {
-                console.log('Expression:', name, '(neutral - all reset)');
+                console.log('Expression reset to neutral');
             }
             
             currentExpression = name;
@@ -380,18 +391,30 @@
         }
         
         // ============================================================
-        // GLOBAL API FOR FLUTTER
+        // GLOBAL API FOR FLUTTER - Must be defined before init()
         // ============================================================
-        window.changeExpression = setExpression;
+        window.changeExpression = function(name, intensity) {
+            console.log('window.changeExpression called:', name);
+            setExpression(name, intensity || 1.0);
+        };
+        
         window.speak = speak;
         
         window.AvatarAPI = {
-            setExpression: setExpression,
-            setExpressionImmediate: setExpression,
+            setExpression: function(name, intensity) {
+                setExpression(name, intensity || 1.0);
+            },
+            setExpressionImmediate: function(name, intensity) {
+                setExpression(name, intensity || 1.0);
+            },
             speak: speak,
             isReady: () => morphMeshes.length > 0,
             getExpressions: () => Object.keys(morphTargetMap).slice(0, 12),
-            welcomeStudent: welcomeStudent
+            welcomeStudent: welcomeStudent,
+            testSmile: function() {
+                console.log('Testing smile expression...');
+                setExpression('smile', 1.0);
+            }
         };
         
         // Initialize
