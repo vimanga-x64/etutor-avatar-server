@@ -117,12 +117,11 @@
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
 
-            // 1. Determine where the "Face" is
-            // Use center.y + 0.30 to focus on face (slightly lower than before)
-            const faceTargetY = center.y + (size.y * 0.30);
+            // 1. Determine where the "Face" is - center on the face, not top of head
+            // Use 0.25 to focus more on face center (lower than before)
+            const faceTargetY = center.y + (size.y * 0.25);
             
             controls.target.set(0, faceTargetY, 0);
-            camera.lookAt(0, faceTargetY, 0);
 
             // 2. Calculate Distance required to fit the head vertically
             const headSize = size.y * 0.25;
@@ -134,10 +133,9 @@
             // 3. Apply a "Zoom Out" factor
             const zoomOutFactor = 2.5;
             
-            camera.position.set(0, faceTargetY, distance * zoomOutFactor);
-            
-            // 4. Move the avatar model slightly forward (negative Z) to hide forehead seam
-            object.position.z = -5;
+            // Position camera slightly HIGHER than face target to look down and hide forehead gash
+            camera.position.set(0, faceTargetY + 10, distance * zoomOutFactor);
+            camera.lookAt(0, faceTargetY - 5, 0);
             
             // Update control limits based on calculated distance
             controls.minDistance = distance * 0.5;
@@ -180,14 +178,12 @@
                     // Find all meshes with morph targets
                     avatarGroup.traverse((child) => {
                         if (child.isMesh) {
-                            // Fix materials for mobile AND enable morph targets
+                            // Fix materials for mobile
                             if (child.material) {
                                 const mats = Array.isArray(child.material) ? child.material : [child.material];
                                 mats.forEach(mat => {
                                     if (mat.map) mat.map.generateMipmaps = false;
                                     if (mat.normalMap) mat.normalMap.generateMipmaps = false;
-                                    // CRITICAL: Enable morph targets on material
-                                    mat.morphTargets = true;
                                     mat.needsUpdate = true;
                                 });
                             }
@@ -196,11 +192,6 @@
                             if (child.morphTargetDictionary && child.morphTargetInfluences) {
                                 morphMeshes.push(child);
                                 console.log('Found morph mesh:', child.name, Object.keys(child.morphTargetDictionary));
-                                
-                                // Ensure geometry knows about morph attributes
-                                if (child.geometry) {
-                                    child.geometry.morphTargetsRelative = false;
-                                }
                                 
                                 // Build map from first mesh
                                 if (Object.keys(morphTargetMap).length === 0) {
@@ -309,23 +300,19 @@
                         const idx = mesh.morphTargetDictionary[targetName];
                         if (idx !== undefined) {
                             mesh.morphTargetInfluences[idx] = intensity;
-                            // Force Three.js to update the morph
-                            mesh.updateMorphTargets();
-                            if (mesh.geometry) mesh.geometry.attributes.position.needsUpdate = true;
                             console.log('SUCCESS: Applied', targetName, 'idx=' + idx, 'on mesh[' + meshIdx + ']', mesh.name);
                             applied = true;
+                        } else {
+                            console.log('Mesh', mesh.name, 'dictionary keys:', Object.keys(mesh.morphTargetDictionary));
                         }
                     }
                 });
                 if (!applied) {
                     console.error('FAILED: Could not find morph target:', targetName);
+                    console.log('Available targets:', Object.keys(morphTargetMap));
                 }
             } else {
                 console.log('Expression reset to neutral');
-                // Also force update on reset
-                morphMeshes.forEach(mesh => {
-                    mesh.updateMorphTargets();
-                });
             }
             
             currentExpression = name;
