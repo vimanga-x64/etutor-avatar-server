@@ -180,12 +180,14 @@
                     // Find all meshes with morph targets
                     avatarGroup.traverse((child) => {
                         if (child.isMesh) {
-                            // Fix materials for mobile
+                            // Fix materials for mobile AND enable morph targets
                             if (child.material) {
                                 const mats = Array.isArray(child.material) ? child.material : [child.material];
                                 mats.forEach(mat => {
                                     if (mat.map) mat.map.generateMipmaps = false;
                                     if (mat.normalMap) mat.normalMap.generateMipmaps = false;
+                                    // CRITICAL: Enable morph targets on material
+                                    mat.morphTargets = true;
                                     mat.needsUpdate = true;
                                 });
                             }
@@ -194,6 +196,11 @@
                             if (child.morphTargetDictionary && child.morphTargetInfluences) {
                                 morphMeshes.push(child);
                                 console.log('Found morph mesh:', child.name, Object.keys(child.morphTargetDictionary));
+                                
+                                // Ensure geometry knows about morph attributes
+                                if (child.geometry) {
+                                    child.geometry.morphTargetsRelative = false;
+                                }
                                 
                                 // Build map from first mesh
                                 if (Object.keys(morphTargetMap).length === 0) {
@@ -302,6 +309,9 @@
                         const idx = mesh.morphTargetDictionary[targetName];
                         if (idx !== undefined) {
                             mesh.morphTargetInfluences[idx] = intensity;
+                            // Force Three.js to update the morph
+                            mesh.updateMorphTargets();
+                            if (mesh.geometry) mesh.geometry.attributes.position.needsUpdate = true;
                             console.log('SUCCESS: Applied', targetName, 'idx=' + idx, 'on mesh[' + meshIdx + ']', mesh.name);
                             applied = true;
                         }
@@ -312,6 +322,10 @@
                 }
             } else {
                 console.log('Expression reset to neutral');
+                // Also force update on reset
+                morphMeshes.forEach(mesh => {
+                    mesh.updateMorphTargets();
+                });
             }
             
             currentExpression = name;
