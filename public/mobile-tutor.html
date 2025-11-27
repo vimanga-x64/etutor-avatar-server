@@ -124,7 +124,13 @@
         // ============================================
         function loadAvatar() {
             const loader = new THREE.GLTFLoader();
-            const modelUrl = 'models/avatar_female.glb';
+            
+            // Get gender from URL parameter (default to female)
+            const urlParams = new URLSearchParams(window.location.search);
+            const gender = urlParams.get('gender') || 'female';
+            const modelUrl = gender === 'male' ? 'models/male_avatar.glb' : 'models/avatar_female.glb';
+            
+            console.log('Loading avatar:', modelUrl, 'gender:', gender);
 
             loader.load(
                 modelUrl,
