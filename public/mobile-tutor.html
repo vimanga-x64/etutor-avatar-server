@@ -180,7 +180,31 @@
                                     mat.depthWrite = true;
                                     mat.morphTargets = true;
                                     mat.morphNormals = true;
-                                    mat.side = THREE.FrontSide;
+                                    mat.side = THREE.DoubleSide; // Show both sides
+                                    
+                                    // DEBUG: If no texture, apply a visible color based on material name
+                                    if (!mat.map) {
+                                        const name = (mat.name || '').toLowerCase();
+                                        if (name.includes('skin') || name.includes('head') || name.includes('body') || name.includes('arm')) {
+                                            mat.color = new THREE.Color(0.9, 0.75, 0.65); // Skin tone
+                                        } else if (name.includes('hair') || name.includes('scalp') || name.includes('beard') || name.includes('stubble') || name.includes('bushy') || name.includes('mustache')) {
+                                            mat.color = new THREE.Color(0.15, 0.1, 0.08); // Dark brown hair
+                                        } else if (name.includes('eye') && !name.includes('lash') && !name.includes('occlusion')) {
+                                            mat.color = new THREE.Color(1, 1, 1); // White of eye
+                                        } else if (name.includes('cornea')) {
+                                            mat.color = new THREE.Color(0.4, 0.25, 0.15); // Brown iris
+                                            mat.transparent = true;
+                                            mat.opacity = 0.9;
+                                        } else if (name.includes('teeth') || name.includes('tongue')) {
+                                            mat.color = new THREE.Color(0.95, 0.92, 0.88); // Teeth white
+                                        } else if (name.includes('lash') || name.includes('brow')) {
+                                            mat.color = new THREE.Color(0.1, 0.08, 0.06); // Dark lashes
+                                        } else if (name.includes('occlusion') || name.includes('tear')) {
+                                            mat.visible = false; // Hide occlusion meshes
+                                        }
+                                        console.log('Applied fallback color to:', mat.name);
+                                    }
+                                    
                                     mat.needsUpdate = true;
                                     
                                     console.log('Material fixed:', mat.name || idx);
