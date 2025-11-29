@@ -137,6 +137,31 @@
                 function(gltf) {
                     avatar = gltf.scene;
                     
+                    // =====================================================
+                    // AUTO-SCALE: Normalize avatar to consistent size
+                    // Male avatar may be very small in Blender, so scale it up
+                    // Target: ~100-200 units tall for consistent camera framing
+                    // =====================================================
+                    const box = new THREE.Box3().setFromObject(avatar);
+                    const size = box.getSize(new THREE.Vector3());
+                    const modelHeight = size.y;
+                    
+                    console.log('Original model size:', size.x.toFixed(2), size.y.toFixed(2), size.z.toFixed(2));
+                    
+                    // Target height of ~150 units (like female avatar)
+                    const targetHeight = 150;
+                    if (modelHeight > 0 && modelHeight < targetHeight * 0.5) {
+                        // Model is too small, scale it up
+                        const scaleFactor = targetHeight / modelHeight;
+                        avatar.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                        console.log('Scaled avatar by', scaleFactor.toFixed(2), 'x (was too small)');
+                    } else if (modelHeight > targetHeight * 2) {
+                        // Model is too big, scale it down
+                        const scaleFactor = targetHeight / modelHeight;
+                        avatar.scale.set(scaleFactor, scaleFactor, scaleFactor);
+                        console.log('Scaled avatar by', scaleFactor.toFixed(2), 'x (was too big)');
+                    }
+                    
                     // Process all meshes
                     avatar.traverse(function(node) {
                         if (node.isMesh) {
@@ -212,38 +237,37 @@
         function fitCameraToAvatar() {
             if (!avatar) return;
 
-            // Get model bounds
+            // Get model bounds AFTER scaling
             const box = new THREE.Box3().setFromObject(avatar);
             const size = box.getSize(new THREE.Vector3());
             const center = box.getCenter(new THREE.Vector3());
 
-            // This model appears to be ~110 units tall based on logs
-            // We want to show head and upper torso (top 40% of model)
             const modelHeight = size.y;
+            
+            console.log('Model bounds after scaling:', 
+                        'height=' + modelHeight.toFixed(2),
+                        'center=' + center.y.toFixed(2));
             
             // Look at point: roughly at chin/neck level (70% up from bottom)
             const lookAtY = box.min.y + modelHeight * 0.70;
             
-            // Camera should be positioned to show head clearly
-            // Distance calculation: far enough to show head+shoulders, avoid clipping
-            // Using a fixed comfortable distance based on model scale
-            const cameraDistance = modelHeight * 2.5; // 2.5x model height away
-            const cameraY = box.min.y + modelHeight * 0.75; // Slightly above look point
+            // Camera distance: 2.5x model height away
+            const cameraDistance = Math.max(modelHeight * 2.5, 100);
+            const cameraY = box.min.y + modelHeight * 0.75;
 
-            // Position camera further back to ensure near plane doesn't clip the face
+            // Position camera
             camera.position.set(center.x, cameraY, center.z + cameraDistance);
             camera.lookAt(center.x, lookAtY, center.z);
             
-            // CRITICAL: Large near plane (200+) eliminates z-fighting on forehead
-            // The gash is caused by two overlapping surfaces fighting for the same depth
-            // By pushing near plane far out, we improve depth buffer precision significantly
-            camera.near = Math.max(200, cameraDistance * 0.4);
-            camera.far = cameraDistance * 5;
+            // Adjust near/far based on actual camera distance
+            // Use smaller near plane for better close-up precision
+            camera.near = Math.max(1, cameraDistance * 0.1);
+            camera.far = cameraDistance * 10;
             camera.updateProjectionMatrix();
 
             console.log('Camera: distance=' + cameraDistance.toFixed(0) + 
                        ', lookAtY=' + lookAtY.toFixed(0) + 
-                       ', near=' + camera.near.toFixed(0) +
+                       ', near=' + camera.near.toFixed(1) +
                        ', modelHeight=' + modelHeight.toFixed(0));
         }
 
