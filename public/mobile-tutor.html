@@ -1,0 +1,2401 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>E-Tutor Avatar</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body {
+            width: 100%; height: 100%; 
+            overflow: hidden; 
+            background: #1a1a1a;
+            touch-action: none;
+        }
+        #canvas-container { 
+            width: 100%; height: 100%; 
+            position: absolute; 
+            top: 0; left: 0;
+        }
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: #666;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            z-index: 100;
+        }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="loading">Loading Avatar...</div>
+
+    <!-- Three.js r128 - better morph target support on mobile WebGL -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <script>
+        // ============================================
+        // GLOBALS
+        // ============================================
+        let scene, camera, renderer, avatar;
+        let morphMeshes = [];
+        let isReady = false;
+        let clock = new THREE.Clock();
+        let currentUtterance = null;
+        let isSpeaking = false;
+        let deviceProfile = null;
+        let lastRenderTimestamp = 0;
+        let restingExpressionName = 'neutral';
+        let preferNativeTts = false;
+        let azureSpeechConfigPromise = null;
+        let azureSpeechConfigCache = null;
+        let azureSpeechConfigFetchedAt = 0;
+        let azureAudioElement = null;
+        let azureAudioContext = null;
+        let azureAudioSource = null;
+        let azureGainNode = null;
+        const AZURE_TARGET_VOLUME = 0.58;
+        const AZURE_FADE_IN_MS = 24;
+        const AZURE_FADE_OUT_MS = 32;
+        const WEB_AUDIO_PRIMARY =
+            new URLSearchParams(window.location.search).get('webaudio_primary') !== '0';
+        const ALLOW_WEB_AUDIO_FALLBACK =
+            new URLSearchParams(window.location.search).get('webaudio_fallback') === '1';
+        const ALLOW_BUFFERED_MEDIA_FALLBACK =
+            new URLSearchParams(window.location.search).get('buffered_media_fallback') === '1';
+        const ALLOW_AUDIO_ELEMENT_FALLBACK =
+            new URLSearchParams(window.location.search).get('audio_element_fallback') === '1';
+        const ALLOW_BROWSER_SPEECH_FALLBACK =
+            new URLSearchParams(window.location.search).get('browser_fallback') === '1';
+        const ALLOW_NATIVE_TTS_FALLBACK =
+            new URLSearchParams(window.location.search).get('native_fallback') === '1';
+        
+        // ============================================
+        // EXPRESSION MAPPING - direct to GLB morph names
+        // ============================================
+        const EXPRESSIONS = {
+            'smile': ['smile'],
+            'happy': ['smile', 'laugh'],
+            'laugh': ['laugh'],
+            'sad': ['sad'],
+            'anger': ['anger'],
+            'angry': ['anger'],
+            'fear': ['fear'],
+            'surprise': ['surprise'],
+            'surprised': ['surprise'],
+            'disgust': ['disgust'],
+            'frown': ['frown'],
+            'closed_smile': ['closed_smile'],
+            'funny_smile': ['funny_smile'],
+            'depress': ['depress'],
+            'neutral': [],
+            'normal': []
+        };
+
+        const MORPH_ALIASES = {
+            angry: ['anger'],
+            surprise_open: ['surprise'],
+            surprised: ['surprise'],
+            happy: ['smile', 'laugh'],
+            neutral: [],
+            normal: []
+        };
+
+        const PHONEME_MAPPING = {
+            'a': 'small_aah', 'b': 'b_m_p', 'c': 'k', 'd': 'd_s_t', 'e': 'eh',
+            'f': 'f_v', 'g': 'eh', 'h': 'small_aah', 'i': 'i', 'j': 'ch_j_sh',
+            'k': 'k', 'l': 'n', 'm': 'b_m_p', 'n': 'n', 'o': 'oh', 'p': 'b_m_p',
+            'q': 'ooh_q', 'r': 'r', 's': 'd_s_t', 't': 'd_s_t', 'u': 'oh',
+            'v': 'f_v', 'w': 'w', 'x': 'k', 'y': 'ee', 'z': 'd_s_t',
+            'aa': 'small_aah', 'ah': 'big_aah', 'eh': 'eh', 'ee': 'ee',
+            'oo': 'ooh_q', 'ou': 'ooh_q', 'ow': 'oh', 'ay': 'eh', 'ey': 'ee',
+            'ai': 'eh', 'oi': 'oh', 'oy': 'oh', 'sh': 'ch_j_sh', 'ch': 'ch_j_sh',
+            'th': 'th', 'ng': 'n', '!': 'b_m_p', '?': 'b_m_p', '.': 'b_m_p',
+            ',': 'b_m_p', ' ': 'b_m_p',
+            '0': 'oh', '1': 'oh', '2': 'd_s_t', '3': 'ee',
+            '4': 'f_v', '5': 'f_v', '6': 'i', '7': 'eh',
+            '8': 'small_aah', '9': 'n'
+        };
+
+        const DESKTOP_TEXT_MAPPING = {
+            'a': 'small_aah',
+            'b': 'b_m_p',
+            'c': 'k',
+            'd': 'd_s_t',
+            'e': 'eh',
+            'f': 'f_v',
+            'g': 'eh',
+            'h': 'small_aah',
+            'i': 'i',
+            'j': 'ch_j_sh',
+            'k': 'k',
+            'l': 'n',
+            'm': 'b_m_p',
+            'n': 'n',
+            'o': 'oh',
+            'p': 'b_m_p',
+            'q': 'ooh_q',
+            'r': 'r',
+            's': 'd_s_t',
+            't': 'd_s_t',
+            'u': 'ooh_q',
+            'v': 'f_v',
+            'w': 'w',
+            'x': 'k',
+            'y': 'ee',
+            'z': 'd_s_t',
+            'aa': 'small_aah',
+            'ah': 'big_aah',
+            'eh': 'eh',
+            'th': 'th',
+            'sh': 'ch_j_sh',
+            'ch': 'ch_j_sh',
+            'ng': 'n',
+            'oo': 'ooh_q',
+            'ou': 'ooh_q',
+            'ow': 'oh',
+            'ee': 'ee',
+            'ea': 'ee',
+            'ai': 'eh',
+            'ay': 'eh',
+            'ey': 'ee',
+            'oi': 'oh',
+            'oy': 'oh',
+            'wh': 'w',
+            'wr': 'r',
+            'kn': 'n',
+            'ph': 'f_v'
+        };
+
+        const DESKTOP_ARPABET_MAPPING = {
+            'AA': 'small_aah',
+            'AE': 'small_aah',
+            'AY': 'small_aah',
+            'EY': 'small_aah',
+            'AH': 'big_aah',
+            'B': 'b_m_p',
+            'D': 'd_s_t',
+            'DH': 'd_s_t',
+            'S': 'd_s_t',
+            'IY': 'ee',
+            'JH': 'ch_j_sh',
+            'Y': 'ee',
+            'EH': 'eh',
+            'ER': 'r',
+            'R': 'r',
+            'F': 'f_v',
+            'V': 'f_v',
+            'W': 'w',
+            'G': 'k',
+            'HH': 'small_aah',
+            'IH': 'i',
+            'K': 'k',
+            'L': 'n',
+            'M': 'b_m_p',
+            'P': 'b_m_p',
+            'N': 'n',
+            'CH': 'ch_j_sh',
+            'SH': 'ch_j_sh',
+            'NG': 'n',
+            'T': 'd_s_t',
+            'TH': 'th',
+            'Z': 'd_s_t',
+            'ZH': 'd_s_t',
+            'AO': 'oh',
+            'AW': 'oh',
+            'OW': 'ooh_q',
+            'UH': 'ooh_q',
+            'UW': 'ooh_q',
+            'OY': 'oh',
+            'SIL': 'b_m_p'
+        };
+
+        const LIP_SHAPES = [
+            'b_m_p', 'big_aah', 'ch_j_sh', 'd_s_t', 'ee', 'eh', 
+            'f_v', 'i', 'k', 'n', 'oh', 'ooh_q', 'r', 'small_aah', 
+            'th', 'w'
+        ];
+
+        const FALLBACK_MORPH_ORDER = [
+            'anger', 'closed_smile', 'depress', 'disgust', 'fear',
+            'frown', 'funny_smile', 'laugh', 'lip_close', 'sad',
+            'smile', 'surprise', 'b_m_p', 'big_aah', 'ch_j_sh',
+            'd_s_t', 'ee', 'eh', 'f_v', 'i', 'k', 'n', 'oh',
+            'ooh_q', 'r', 'small_aah', 'th', 'w'
+        ];
+
+        const DESKTOP_EXPRESSION_PROFILES = {
+            neutral: {},
+            normal: {},
+            smile: { smile: 0.72, closed_smile: 0.20 },
+            // Original desktop 'happy' = FACS_06 (cheek raiser) + FACS_12
+            // (lip corner puller).  On mobile this maps to closed_smile
+            // (cheek/eye crinkle) + smile (lip corners up) — a Duchenne smile.
+            // We deliberately avoid the 'laugh' morph target which causes
+            // extreme teeth-baring distortion on this GLB model.
+            happy: { closed_smile: 0.70, smile: 0.55 },
+            // Original desktop correct-answer: simulate(..., 'laugh').
+            // The desktop Combiner uses per-vertex variance weighting to
+            // attenuate around the mouth.  On mobile, we approximate this
+            // with closed_smile (warm cheek/eye expression) + smile (subtle
+            // lip raise).  This produces a clearly happy but natural face.
+            laugh: { closed_smile: 0.78, smile: 0.55 },
+            sad: { sad: 0.78, depress: 0.28, frown: 0.15 },
+            anger: { anger: 0.80, frown: 0.32 },
+            angry: { anger: 0.80, frown: 0.32 },
+            fear: { fear: 0.80, surprise: 0.22, frown: 0.10 },
+            surprise: { surprise: 0.82, fear: 0.08 },
+            surprised: { surprise: 0.82, fear: 0.08 },
+            disgust: { disgust: 0.80, frown: 0.22, depress: 0.08 },
+            frown: { frown: 0.72, sad: 0.12 },
+            closed_smile: { closed_smile: 0.75, smile: 0.18 },
+            funny_smile: { funny_smile: 0.78, smile: 0.10 },
+            depress: { depress: 0.82, sad: 0.18 }
+        };
+
+        const OPEN_LIP_SHAPES = new Set([
+            'small_aah', 'big_aah', 'oh', 'eh', 'i', 'ee', 'ooh_q', 'r'
+        ]);
+
+        const CLOSED_LIP_SHAPES = new Set([
+            'b_m_p', 'd_s_t', 'f_v', 'k', 'n', 'th', 'w', 'ch_j_sh'
+        ]);
+
+        const LIP_SHAPE_STRENGTH = {
+            b_m_p: 0.92,
+            big_aah: 1.12,
+            ch_j_sh: 0.86,
+            d_s_t: 0.84,
+            ee: 0.9,
+            eh: 0.98,
+            f_v: 0.82,
+            i: 0.94,
+            k: 0.82,
+            n: 0.8,
+            oh: 1.02,
+            ooh_q: 0.96,
+            r: 0.88,
+            small_aah: 1.0,
+            th: 0.78,
+            w: 0.8
+        };
+
+        // Resting pose: all lip morphs at zero so the mouth sits naturally
+        // closed. The original desktop resets to plain_face (all zeros) after
+        // speech finishes via client.simCharSetFacePresets(face).
+        const RESTING_LIP_SHAPES = [];
+
+        const EXPRESSION_STRENGTH = {
+            neutral: 1.0,
+            normal: 1.0,
+            smile: 1.0,
+            happy: 1.0,
+            laugh: 1.0,
+            sad: 1.0,
+            anger: 1.0,
+            angry: 1.0,
+            fear: 1.0,
+            surprise: 1.0,
+            disgust: 1.0,
+            frown: 1.0,
+            closed_smile: 1.0,
+            funny_smile: 1.0,
+            depress: 1.0
+        };
+
+        const EMOTION_SPEECH_PROFILES = {
+            neutral: { rate: 0.8, pitch: 1.0, volume: 1.0, expressionIntensity: 0.92 },
+            normal: { rate: 0.8, pitch: 1.0, volume: 1.0, expressionIntensity: 0.92 },
+            happy: { rate: 0.84, pitch: 1.08, volume: 1.0, expressionIntensity: 0.98 },
+            smile: { rate: 0.82, pitch: 1.04, volume: 1.0, expressionIntensity: 0.96 },
+            laugh: { rate: 0.84, pitch: 1.1, volume: 1.0, expressionIntensity: 0.98 },
+            sadness: { rate: 0.7, pitch: 0.92, volume: 0.94, expressionIntensity: 0.96 },
+            sad: { rate: 0.7, pitch: 0.92, volume: 0.94, expressionIntensity: 0.96 },
+            anger: { rate: 0.77, pitch: 0.96, volume: 1.0, expressionIntensity: 1.0 },
+            angry: { rate: 0.77, pitch: 0.96, volume: 1.0, expressionIntensity: 1.0 },
+            fear: { rate: 0.74, pitch: 1.06, volume: 0.96, expressionIntensity: 0.98 },
+            surprise: { rate: 0.82, pitch: 1.08, volume: 1.0, expressionIntensity: 1.0 },
+            disgust: { rate: 0.72, pitch: 0.95, volume: 0.96, expressionIntensity: 0.98 },
+            frown: { rate: 0.72, pitch: 0.95, volume: 0.96, expressionIntensity: 0.94 },
+            depress: { rate: 0.68, pitch: 0.9, volume: 0.92, expressionIntensity: 0.98 },
+            closed_smile: { rate: 0.8, pitch: 1.02, volume: 1.0, expressionIntensity: 0.96 },
+            funny_smile: { rate: 0.81, pitch: 1.04, volume: 1.0, expressionIntensity: 0.95 }
+        };
+
+        function resolveMorphIndex(dictionary, morphName) {
+            if (!dictionary || !morphName) return -1;
+
+            if (dictionary[morphName] !== undefined) {
+                return dictionary[morphName];
+            }
+
+            const target = morphName.toLowerCase();
+            const dictKeys = Object.keys(dictionary);
+
+            const exactLower = dictKeys.find((key) => key.toLowerCase() === target);
+            if (exactLower) {
+                return dictionary[exactLower];
+            }
+
+            const containsLower = dictKeys.find((key) =>
+                key.toLowerCase().includes(target) || target.includes(key.toLowerCase())
+            );
+            if (containsLower) {
+                return dictionary[containsLower];
+            }
+
+            const aliases = MORPH_ALIASES[target] || [];
+            for (const alias of aliases) {
+                if (dictionary[alias] !== undefined) {
+                    return dictionary[alias];
+                }
+                const aliasLower = dictKeys.find((key) => key.toLowerCase() === alias.toLowerCase());
+                if (aliasLower) {
+                    return dictionary[aliasLower];
+                }
+            }
+
+            const fallbackName = aliases.find((alias) => FALLBACK_MORPH_ORDER.includes(alias)) || target;
+            const fallbackIndex = FALLBACK_MORPH_ORDER.indexOf(fallbackName);
+            if (fallbackIndex >= 0) {
+                const hasNumericKeys = dictKeys.length > 0 && dictKeys.every((key) => /^\d+$/.test(String(key)));
+                const hasNumericIndex = dictionary[String(fallbackIndex)] !== undefined || dictionary[fallbackIndex] !== undefined;
+                if (hasNumericKeys || hasNumericIndex) {
+                    return fallbackIndex;
+                }
+            }
+
+            return -1;
+        }
+
+        function requestFlutterNativeTts(text, expression, speechProfile, phonemes) {
+            if (!window.Flutter || typeof window.Flutter.postMessage !== 'function') {
+                return false;
+            }
+
+            const phonemePayload = Array.isArray(phonemes) ? phonemes.join(',') : '';
+            const requestId = Number(arguments.length > 4 ? arguments[4] : 0) || 0;
+            const payload = `native_tts::${requestId}::${encodeURIComponent(text)}::${encodeURIComponent(expression || 'neutral')}::${Number(speechProfile?.rate || 0.88).toFixed(3)}::${Number(speechProfile?.pitch || 1.0).toFixed(3)}::${Number(speechProfile?.volume || 1.0).toFixed(3)}::${encodeURIComponent(phonemePayload)}`;
+            window.Flutter.postMessage(payload);
+            return true;
+        }
+
+        function postFlutterSpeechComplete(requestId) {
+            if (!requestId || !window.Flutter || typeof window.Flutter.postMessage !== 'function') {
+                return;
+            }
+            window.Flutter.postMessage(`speech_complete::${requestId}`);
+        }
+
+        function postFlutterSpeechError(requestId, message) {
+            if (!requestId || !window.Flutter || typeof window.Flutter.postMessage !== 'function') {
+                return;
+            }
+            window.Flutter.postMessage(`speech_error::${requestId}::${encodeURIComponent(message || 'speech error')}`);
+        }
+
+        function postFlutterSpeechEngine(requestId, engine) {
+            if (!window.Flutter || typeof window.Flutter.postMessage !== 'function') {
+                return;
+            }
+            const safeEngine = encodeURIComponent(String(engine || 'unknown'));
+            const safeRequestId = Number(requestId) || 0;
+            window.Flutter.postMessage(`speech_engine::${safeRequestId}::${safeEngine}`);
+        }
+
+        async function getAzureSpeechConfig() {
+            // Reuse cached config if less than 7 minutes old
+            const now = Date.now();
+            if (azureSpeechConfigCache && azureSpeechConfigCache.enabled && (now - azureSpeechConfigFetchedAt) < 7 * 60 * 1000) {
+                return azureSpeechConfigCache;
+            }
+
+            if (azureSpeechConfigPromise) {
+                return azureSpeechConfigPromise;
+            }
+
+            azureSpeechConfigPromise = fetch('/azure-speech/config', {
+                method: 'GET',
+                cache: 'no-store'
+            }).then(async response => {
+                if (!response.ok) {
+                    throw new Error(`Azure speech config failed: ${response.status}`);
+                }
+                const config = await response.json();
+                azureSpeechConfigCache = config;
+                azureSpeechConfigFetchedAt = Date.now();
+                return config;
+            }).catch(error => {
+                console.warn('Cloud TTS config unavailable:', error);
+                return { enabled: false };
+            }).finally(() => {
+                azureSpeechConfigPromise = null;
+            });
+
+            return azureSpeechConfigPromise;
+        }
+
+        // Lazily create or resume a shared AudioContext at the device's native
+        // sample rate.  The Azure WAV is 24 kHz but decodeAudioData will
+        // resample it to the native rate ONCE upfront (high-quality offline
+        // resample).  Using the device's native rate avoids the real-time
+        // per-buffer resampling that causes audible crackling on Android.
+        function getAudioContext() {
+            if (!azureAudioContext || azureAudioContext.state === 'closed') {
+                azureAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (azureAudioContext.state === 'suspended') {
+                azureAudioContext.resume();
+            }
+            return azureAudioContext;
+        }
+
+        function clearAzureAudio() {
+            // Stop any playing Web Audio source
+            if (azureAudioSource) {
+                const sourceToStop = azureAudioSource;
+                const gainToStop = azureGainNode;
+                try {
+                    sourceToStop.onended = null;
+                    if (gainToStop && azureAudioContext && azureAudioContext.state !== 'closed') {
+                        const now = azureAudioContext.currentTime;
+                        const currentGain = Math.max(0, Number(gainToStop.gain.value) || 0);
+                        gainToStop.gain.cancelScheduledValues(now);
+                        gainToStop.gain.setValueAtTime(currentGain, now);
+                        gainToStop.gain.linearRampToValueAtTime(0, now + 0.028);
+                        sourceToStop.stop(now + 0.03);
+                        setTimeout(() => {
+                            try { sourceToStop.disconnect(); } catch (_) {}
+                        }, 40);
+                    } else {
+                        sourceToStop.stop();
+                        sourceToStop.disconnect();
+                    }
+                } catch (_) {}
+                azureAudioSource = null;
+            }
+            if (azureGainNode) {
+                try { azureGainNode.disconnect(); } catch (_) {}
+                azureGainNode = null;
+            }
+            // Legacy Audio element cleanup (for fallback path)
+            if (azureAudioElement) {
+                const audioToStop = azureAudioElement;
+                try {
+                    if (audioToStop._fadeOutTimer) {
+                        clearTimeout(audioToStop._fadeOutTimer);
+                        audioToStop._fadeOutTimer = null;
+                    }
+                    if (audioToStop._volumeRampFrame) {
+                        cancelAnimationFrame(audioToStop._volumeRampFrame);
+                        audioToStop._volumeRampFrame = null;
+                    }
+                    if (audioToStop._stopTimer) {
+                        clearTimeout(audioToStop._stopTimer);
+                        audioToStop._stopTimer = null;
+                    }
+
+                    if (!audioToStop.paused && audioToStop.currentTime > 0) {
+                        const currentVolume = Math.max(0, Math.min(1, Number(audioToStop.volume) || 0));
+                        audioToStop.volume = currentVolume;
+                        rampAudioElementVolume(audioToStop, 0, 26);
+                        audioToStop._stopTimer = setTimeout(() => {
+                            try {
+                                audioToStop.pause();
+                                audioToStop.removeAttribute('src');
+                                audioToStop.load();
+                            } catch (_) {}
+                        }, 32);
+                    } else {
+                        audioToStop.pause();
+                        audioToStop.removeAttribute('src');
+                        audioToStop.load();
+                    }
+                } catch (_) {}
+                azureAudioElement = null;
+            }
+            // Clear any pending viseme timers
+            if (window._azureVisemeTimers) {
+                window._azureVisemeTimers.forEach(t => clearTimeout(t));
+                window._azureVisemeTimers = [];
+            }
+        }
+
+        function rampAudioElementVolume(audio, toVolume, durationMs) {
+            if (!audio) return;
+            const target = Math.max(0, Math.min(1, Number(toVolume) || 0));
+            const duration = Math.max(1, Number(durationMs) || 1);
+            const start = Math.max(0, Math.min(1, Number(audio.volume) || 0));
+
+            if (audio._volumeRampFrame) {
+                cancelAnimationFrame(audio._volumeRampFrame);
+                audio._volumeRampFrame = null;
+            }
+
+            if (Math.abs(target - start) < 0.002) {
+                audio.volume = target;
+                return;
+            }
+
+            const startAt = performance.now();
+            const tick = (now) => {
+                const t = Math.max(0, Math.min(1, (now - startAt) / duration));
+                // Smoothstep for gentle attack/release.
+                const smooth = t * t * (3 - 2 * t);
+                audio.volume = start + (target - start) * smooth;
+
+                if (t < 1) {
+                    audio._volumeRampFrame = requestAnimationFrame(tick);
+                } else {
+                    audio._volumeRampFrame = null;
+                    audio.volume = target;
+                }
+            };
+
+            audio._volumeRampFrame = requestAnimationFrame(tick);
+        }
+
+        function scheduleAudioFadeOut(audio) {
+            if (!audio || !Number.isFinite(audio.duration) || audio.duration <= 0) {
+                return;
+            }
+
+            if (audio._fadeOutTimer) {
+                clearTimeout(audio._fadeOutTimer);
+                audio._fadeOutTimer = null;
+            }
+
+            const totalMs = Math.round(audio.duration * 1000);
+            const fadeLeadMs = Math.max(AZURE_FADE_OUT_MS + 12, 45);
+            const delay = Math.max(0, totalMs - fadeLeadMs);
+            audio._fadeOutTimer = setTimeout(() => {
+                rampAudioElementVolume(audio, 0.0, AZURE_FADE_OUT_MS);
+            }, delay);
+        }
+
+        async function waitForSpeechIdle(timeoutMs) {
+            if (!isSpeaking) return;
+            const timeout = Math.max(80, Number(timeoutMs) || 80);
+            const start = Date.now();
+            while (isSpeaking && (Date.now() - start) < timeout) {
+                await new Promise((resolve) => setTimeout(resolve, 18));
+            }
+        }
+
+        // Extra client-side conditioning pass to remove tiny transients that
+        // can still appear as pops after decode on some Android devices.
+        function conditionDecodedBuffer(audioBuffer) {
+            if (!audioBuffer || !audioBuffer.length || !audioBuffer.numberOfChannels) {
+                return;
+            }
+
+            const frameCount = audioBuffer.length;
+            const fadeSamples = Math.max(1, Math.min(
+                Math.floor(audioBuffer.sampleRate * 0.02),
+                Math.floor(frameCount / 2),
+            ));
+
+            for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+                const data = audioBuffer.getChannelData(ch);
+                if (!data || data.length < 8) continue;
+
+                // Remove DC offset.
+                let sum = 0;
+                for (let i = 0; i < frameCount; i++) {
+                    sum += data[i];
+                }
+                const mean = sum / frameCount;
+                if (Math.abs(mean) > 1e-5) {
+                    for (let i = 0; i < frameCount; i++) {
+                        data[i] -= mean;
+                    }
+                }
+
+                // Suppress isolated one-sample spikes.
+                const clickThreshold = 0.18;
+                for (let i = 1; i < frameCount - 1; i++) {
+                    const prev = data[i - 1];
+                    const curr = data[i];
+                    const next = data[i + 1];
+                    const jumpIn = curr - prev;
+                    const jumpOut = next - curr;
+                    const opposite = (jumpIn > 0 && jumpOut < 0) || (jumpIn < 0 && jumpOut > 0);
+                    if (opposite && Math.abs(jumpIn) > clickThreshold && Math.abs(jumpOut) > clickThreshold) {
+                        data[i] = (prev + next) * 0.5;
+                    }
+                }
+
+                // Strong edge fade in/out.
+                for (let i = 0; i < fadeSamples; i++) {
+                    const g = i / fadeSamples;
+                    data[i] *= g;
+                    data[frameCount - 1 - i] *= g;
+                }
+
+                // Gentle soft limiting to avoid inter-sample clipping artifacts.
+                const limit = 0.70;
+                const tail = 1.0 - limit;
+                for (let i = 0; i < frameCount; i++) {
+                    const x = data[i];
+                    const ax = Math.abs(x);
+                    if (ax > limit) {
+                        const over = (ax - limit) / tail;
+                        const shaped = limit + tail * Math.tanh(over);
+                        data[i] = Math.sign(x) * shaped;
+                    }
+                }
+            }
+        }
+
+        // Azure viseme ID → avatar lip morph target
+        // IDs 0-21 from Azure Neural TTS phonetic analysis
+        const AZURE_VISEME_TO_LIP_SHAPE = {
+            0: null,           // Silence — relax to neutral (no lip shape active)
+            1: 'eh',          // ae, ax, ah
+            2: 'big_aah',     // aa
+            3: 'oh',          // ao
+            4: 'eh',          // ey, eh, uh
+            5: 'r',           // er
+            6: 'ee',          // y, iy, ih
+            7: 'w',           // w, uw
+            8: 'ooh_q',       // ow
+            9: 'w',           // aw
+            10: 'oh',         // oy
+            11: 'eh',         // ay
+            12: 'small_aah',  // h
+            13: 'r',          // r
+            14: 'n',          // l
+            15: 'd_s_t',      // s, z
+            16: 'ch_j_sh',    // sh, ch, jh, zh
+            17: 'th',         // th, dh
+            18: 'f_v',        // f, v
+            19: 'd_s_t',      // d, t, n, th
+            20: 'k',          // k, g, ng
+            21: 'b_m_p',      // p, b, m
+        };
+
+        // Apply an Azure viseme by instantly writing to morph targets
+        function applyAzureViseme(visemeId) {
+            const shapeName = AZURE_VISEME_TO_LIP_SHAPE[visemeId];
+            
+            if (!isReady || morphMeshes.length === 0) return;
+            
+            morphMeshes.forEach(mesh => {
+                const dictionary = mesh.morphTargetDictionary;
+                if (!dictionary) return;
+                
+                // Zero out all lip shapes
+                LIP_SHAPES.forEach(shape => {
+                    const idx = resolveMorphIndex(dictionary, shape);
+                    if (idx >= 0) {
+                        mesh.morphTargetInfluences[idx] = 0;
+                        mesh.userData.currentInfluences[idx] = 0;
+                        mesh.userData.targetInfluences[idx] = 0;
+                    }
+                });
+                
+                // Set the target shape (skip if null = silence/neutral)
+                if (shapeName) {
+                    const targetIdx = resolveMorphIndex(dictionary, shapeName);
+                    if (targetIdx >= 0) {
+                        const strength = LIP_SHAPE_STRENGTH[shapeName] || 1.0;
+                        mesh.morphTargetInfluences[targetIdx] = strength;
+                        mesh.userData.currentInfluences[targetIdx] = strength;
+                        mesh.userData.targetInfluences[targetIdx] = strength;
+                    }
+                }
+            });
+        }
+
+        async function trySpeakWithAzure(requestId, speechText, expression, speechProfile) {
+            const config = await getAzureSpeechConfig();
+            if (!config.enabled) {
+                return false;
+            }
+
+            // Compute SSML rate/pitch for the server
+            const ratePercent = Math.max(-50, Math.min(5, Math.round(((speechProfile.rate / 0.85) - 1) * 100) - 10));
+            const pitchPercent = Math.max(-15, Math.min(15, Math.round((speechProfile.pitch - 1.0) * 100)));
+
+            try {
+                // Avoid hard-cutting active audio where possible.
+                await waitForSpeechIdle(420);
+                clearAzureAudio();
+                stopLipSync();
+
+                const response = await fetch('/azure-speech/synthesize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: speechText,
+                        rate: ratePercent,
+                        pitch: pitchPercent,
+                    }),
+                });
+
+                if (!response.ok) {
+                    console.warn('[Cloud TTS] Server returned', response.status);
+                    return false;
+                }
+
+                const data = await response.json();
+                const audioUrl = data.audioUrl;
+                const visemes = data.visemes || [];
+                const provider = data.provider || config.provider || 'cloud';
+
+                if (!audioUrl) {
+                    console.warn('[Cloud TTS] No audioUrl in response');
+                    return false;
+                }
+
+                isSpeaking = true;
+                setExpression(expression, Math.min(1.32, speechProfile.expressionIntensity + 0.18), { persist: false, immediate: true });
+
+                // ── Play via HTML Audio element with direct server URL ──
+                // This is the ONLY audio path.  The Audio element feeds the WAV
+                // directly into Android's native MediaPlayer (a separate OS
+                // process), completely bypassing WebAudio which causes crackling.
+                return await _playViaDirectUrl(requestId, audioUrl, visemes, speechProfile, provider);
+            } catch (error) {
+                console.warn('[Cloud TTS] fetch/play error:', error);
+                return false;
+            }
+        }
+
+
+        // ── Play audio from an in-memory Blob URL via HTML Audio ──
+        // Keeps decoding in the platform media pipeline while avoiding
+        // network-stream jitter during playback.
+        async function _playViaBufferedAudioElement(requestId, audioBytes, visemes, speechProfile, mimeType) {
+            const audioBlob = new Blob([audioBytes], { type: mimeType || 'audio/wav' });
+            const blobUrl = URL.createObjectURL(audioBlob);
+            const audio = new Audio();
+            audio.preload = 'auto';
+            const targetVolume = Math.min(
+                AZURE_TARGET_VOLUME,
+                Math.max(0, Number(speechProfile?.volume || 1.0))
+            );
+            audio.volume = 0.0;
+            azureAudioElement = audio;
+
+            return await new Promise((resolve) => {
+                audio.onplay = function() {
+                    postFlutterSpeechEngine(requestId, 'azure_audio_element_buffered');
+                    console.log('[Azure TTS] ▶ Playing via buffered audio element (' +
+                        (audio.duration ? audio.duration.toFixed(2) + 's' : '?') + ')');
+                    rampAudioElementVolume(audio, targetVolume, AZURE_FADE_IN_MS);
+                    scheduleAudioFadeOut(audio);
+                    _startAzureLipSync(visemes);
+                };
+
+                audio.onended = function() {
+                    if (audio._fadeOutTimer) {
+                        clearTimeout(audio._fadeOutTimer);
+                        audio._fadeOutTimer = null;
+                    }
+                    if (audio._volumeRampFrame) {
+                        cancelAnimationFrame(audio._volumeRampFrame);
+                        audio._volumeRampFrame = null;
+                    }
+                    if (audio._stopTimer) {
+                        clearTimeout(audio._stopTimer);
+                        audio._stopTimer = null;
+                    }
+                    URL.revokeObjectURL(blobUrl);
+                    _finishAzurePlayback(null, requestId);
+                    azureAudioElement = null;
+                    resolve(true);
+                };
+
+                audio.onerror = function(event) {
+                    console.error('[Azure TTS] Buffered audio element error:', event);
+                    if (audio._fadeOutTimer) {
+                        clearTimeout(audio._fadeOutTimer);
+                        audio._fadeOutTimer = null;
+                    }
+                    if (audio._volumeRampFrame) {
+                        cancelAnimationFrame(audio._volumeRampFrame);
+                        audio._volumeRampFrame = null;
+                    }
+                    if (audio._stopTimer) {
+                        clearTimeout(audio._stopTimer);
+                        audio._stopTimer = null;
+                    }
+                    URL.revokeObjectURL(blobUrl);
+                    isSpeaking = false;
+                    azureAudioElement = null;
+                    resolve(false);
+                };
+
+                audio.onloadedmetadata = function() {
+                    scheduleAudioFadeOut(audio);
+                };
+
+                audio.oncanplaythrough = function() {
+                    audio.oncanplaythrough = null;
+                    audio.play().catch(function(err) {
+                        console.warn('[Azure TTS] Buffered audio play() rejected:', err);
+                        URL.revokeObjectURL(blobUrl);
+                        isSpeaking = false;
+                        azureAudioElement = null;
+                        resolve(false);
+                    });
+                };
+
+                audio.src = blobUrl;
+            });
+        }
+
+        async function _playViaWebAudioBuffer(requestId, audioBytes, visemes, speechProfile) {
+            try {
+                const ctx = getAudioContext();
+                const decoded = await ctx.decodeAudioData(audioBytes.slice(0));
+                conditionDecodedBuffer(decoded);
+                const source = ctx.createBufferSource();
+                const highpass = ctx.createBiquadFilter();
+                highpass.type = 'highpass';
+                highpass.frequency.value = 56;
+                highpass.Q.value = 0.7;
+
+                const compressor = ctx.createDynamicsCompressor();
+                compressor.threshold.value = -20;
+                compressor.knee.value = 14;
+                compressor.ratio.value = 6;
+                compressor.attack.value = 0.003;
+                compressor.release.value = 0.18;
+
+                const gainNode = ctx.createGain();
+                const targetVolume = Math.min(
+                    AZURE_TARGET_VOLUME,
+                    Math.max(0, Number(speechProfile?.volume || 1.0)),
+                );
+                const duration = decoded.duration;
+                const now = ctx.currentTime;
+                const fadeInSec = Math.max(0.010, AZURE_FADE_IN_MS / 1000);
+                const fadeOutSec = Math.max(0.012, AZURE_FADE_OUT_MS / 1000);
+
+                gainNode.gain.setValueAtTime(0, now);
+                gainNode.gain.linearRampToValueAtTime(targetVolume, now + fadeInSec);
+                if (duration > fadeInSec + fadeOutSec) {
+                    gainNode.gain.setValueAtTime(targetVolume, now + duration - fadeOutSec);
+                }
+                gainNode.gain.linearRampToValueAtTime(0, now + duration);
+
+                source.buffer = decoded;
+                source.connect(highpass);
+                highpass.connect(compressor);
+                compressor.connect(gainNode);
+                gainNode.connect(ctx.destination);
+
+                azureAudioSource = source;
+                azureGainNode = gainNode;
+
+                return await new Promise((resolve) => {
+                    _startAzureLipSync(visemes);
+
+                    source.onended = function() {
+                        console.log('[Azure TTS] WebAudio playback complete');
+                        _finishAzurePlayback(gainNode, requestId);
+                        resolve(true);
+                    };
+
+                    try {
+                        source.start(0);
+                        postFlutterSpeechEngine(requestId, 'azure_webaudio_buffered');
+                        console.log('[Azure TTS] ▶ Playing via buffered WebAudio (' + duration.toFixed(2) + 's)');
+                    } catch (playError) {
+                        console.warn('[Azure TTS] buffered WebAudio start failed:', playError);
+                        isSpeaking = false;
+                        azureAudioSource = null;
+                        try { gainNode.disconnect(); } catch (_) {}
+                        azureGainNode = null;
+                        resolve(false);
+                    }
+                });
+            } catch (error) {
+                console.warn('[Azure TTS] buffered WebAudio error:', error);
+                return false;
+            }
+        }
+
+        // ── Play audio directly from a server URL ──
+        // This is the cleanest audio path on Android: the browser's native
+        // HTTP streaming feeds directly into Android's MediaPlayer process.
+        // No JavaScript audio processing, no Blob creation, no base64 decoding.
+        async function _playViaDirectUrl(requestId, audioUrl, visemes, speechProfile, provider) {
+            const audio = new Audio();
+            audio.preload = 'auto';
+            const targetVolume = Math.min(
+                AZURE_TARGET_VOLUME,
+                Math.max(0, Number(speechProfile?.volume || 1.0))
+            );
+            audio.volume = targetVolume;
+            azureAudioElement = audio;
+
+            return await new Promise((resolve) => {
+                audio.onplay = function() {
+                    const engineId = provider === 'polly' ? 'polly_audio_element_stream' : 'azure_audio_element_stream';
+                    const providerLabel = provider === 'polly' ? 'Polly TTS' : 'Cloud TTS';
+                    postFlutterSpeechEngine(requestId, engineId);
+                    console.log('[' + providerLabel + '] Playing (' +
+                        (audio.duration ? audio.duration.toFixed(2) + 's' : '?') +
+                        ') from ' + audioUrl);
+                    _startAzureLipSync(visemes);
+                };
+
+                audio.onended = function() {
+                    console.log('[Azure TTS] Playback complete');
+                    _finishAzurePlayback(null, requestId);
+                    azureAudioElement = null;
+                    resolve(true);
+                };
+
+                audio.onerror = function(event) {
+                    console.error('[Azure TTS] Audio error:', event);
+                    isSpeaking = false;
+                    azureAudioElement = null;
+                    resolve(false);
+                };
+
+                // Wait for the browser to confirm enough data is buffered
+                // for uninterrupted playback before starting.
+                audio.oncanplaythrough = function() {
+                    audio.oncanplaythrough = null;
+                    audio.play().catch(function(err) {
+                        console.warn('[Azure TTS] play() rejected:', err);
+                        isSpeaking = false;
+                        azureAudioElement = null;
+                        resolve(false);
+                    });
+                };
+
+                // Set src AFTER all event handlers are attached.
+                // The browser will fetch the WAV from the server URL using its
+                // native HTTP stack and decode it in the MediaPlayer process.
+                audio.src = audioUrl;
+            });
+        }
+
+        // ── Shared: start Azure viseme lip-sync animation ──
+        let _azureVisemes = [];
+        let _azureVisemeIndex = -1;
+
+        function _startAzureLipSync(visemes) {
+            lipSyncActive = true;
+            if (lipSyncFrameId) {
+                cancelAnimationFrame(lipSyncFrameId);
+                lipSyncFrameId = null;
+            }
+            
+            _azureVisemes = visemes || [];
+            _azureVisemeIndex = -1;
+            lipSyncStartTime = Date.now();
+            lastLipAnimTime = Date.now();
+            
+            lipAnimator.reset();
+            lipAnimator.statDur = 0.001;
+            
+            animateAzureLipSync();
+        }
+
+        function animateAzureLipSync() {
+            if (!lipSyncActive) return;
+
+            const now = Date.now();
+            const dt = Math.min((now - lastLipAnimTime) / 1000, 0.05);
+            lastLipAnimTime = now;
+
+            const elapsed = now - lipSyncStartTime;
+
+            let nextIndex = _azureVisemeIndex + 1;
+            while (nextIndex < _azureVisemes.length && _azureVisemes[nextIndex].offset <= elapsed) {
+                nextIndex++;
+            }
+            
+            const currentVisemeIndex = nextIndex - 1;
+            if (currentVisemeIndex >= 0 && currentVisemeIndex !== _azureVisemeIndex) {
+                _azureVisemeIndex = currentVisemeIndex;
+                const viseme = _azureVisemes[_azureVisemeIndex];
+                const shapeName = AZURE_VISEME_TO_LIP_SHAPE[viseme.id];
+                
+                // Estimate duration until next viseme (or default to 100ms)
+                const nextOffset = (_azureVisemeIndex + 1) < _azureVisemes.length 
+                    ? _azureVisemes[_azureVisemeIndex + 1].offset 
+                    : elapsed + 100;
+                
+                const durationMs = Math.max(nextOffset - viseme.offset, 40);
+                lipAnimator.transDur = Math.max(durationMs / 1000, 0.04);
+                
+                lipAnimator.setPhonemeTarget(shapeName || null);
+            }
+
+            if (_azureVisemeIndex >= _azureVisemes.length - 1 && elapsed > (_azureVisemes.length > 0 ? _azureVisemes[_azureVisemes.length - 1].offset + 150 : 150)) {
+                // Done
+                lipAnimator.setPhonemeTarget(null);
+                const lipValues = lipAnimator.getValues(dt);
+                applyLipValues(lipValues);
+                
+                let maxVal = 0;
+                LIP_SHAPES.forEach(s => { maxVal = Math.max(maxVal, Math.abs(lipValues[s] || 0)); });
+                if (maxVal < 0.01) {
+                    stopLipSync();
+                    return;
+                }
+            }
+
+            const lipValues = lipAnimator.getValues(dt);
+            applyLipValues(lipValues);
+
+            lipSyncFrameId = requestAnimationFrame(animateAzureLipSync);
+        }
+
+        // ── Shared: finish Azure playback and clean up ──
+        function _finishAzurePlayback(gainNode, requestId) {
+            isSpeaking = false;
+            azureAudioSource = null;
+            azureGainNode = null;
+            lipAnimator.setPhonemeTarget(null);
+            setTimeout(function() {
+                lipSyncActive = false;
+                if (lipSyncFrameId) {
+                    cancelAnimationFrame(lipSyncFrameId);
+                    lipSyncFrameId = null;
+                }
+                lipAnimator.reset();
+                resetAllLipTargets();
+                clearAzureAudio();
+                setExpression(restingExpressionName, 1.0, { persist: false });
+            }, 200);
+            if (gainNode) {
+                try { gainNode.disconnect(); } catch (_) {}
+            }
+            postFlutterSpeechComplete(requestId);
+        }
+
+        async function speakRequest(requestId, request) {
+            const speechText = request.text;
+            if (!speechText) {
+                postFlutterSpeechError(requestId, 'No speech text provided');
+                return false;
+            }
+
+            const expression = EXPRESSIONS[request.emotion] ? request.emotion : 'neutral';
+            const speechProfile = request.speechProfile;
+
+            // Priority 1: Azure Neural TTS (best quality, viseme lip-sync).
+            // Retry for transient network/decode/audio-start hiccups.
+            for (let attempt = 0; attempt < 3; attempt++) {
+                try {
+                    const azureSuccess = await trySpeakWithAzure(
+                        requestId,
+                        speechText,
+                        expression,
+                        speechProfile,
+                    );
+                    if (azureSuccess) {
+                        return true;
+                    }
+                    console.warn(`[Azure TTS] Attempt ${attempt + 1} returned false`);
+                } catch (azureError) {
+                    console.warn(`[Azure TTS] Attempt ${attempt + 1} threw`, azureError);
+                }
+
+                if (attempt < 2) {
+                    await new Promise((resolve) => setTimeout(resolve, 220 + (attempt * 180)));
+                }
+            }
+
+            // Priority 2: Browser SpeechSynthesis fallback.
+            // Prefer this before native_tts to avoid Android native static artifacts.
+            if (window.speechSynthesis && ALLOW_BROWSER_SPEECH_FALLBACK) {
+                if (currentUtterance) {
+                    window.speechSynthesis.cancel();
+                    currentUtterance = null;
+                    isSpeaking = false;
+                }
+
+                setExpression(expression, Math.min(1.22, speechProfile.expressionIntensity + 0.08), { persist: false });
+
+                const utterance = new SpeechSynthesisUtterance(speechText);
+                utterance.rate = speechProfile.rate;
+                utterance.pitch = speechProfile.pitch;
+                utterance.volume = speechProfile.volume;
+
+                const speechDuration = (speechText.length / 15) / utterance.rate;
+
+                utterance.onstart = function() {
+                    isSpeaking = true;
+                    setExpression(expression, Math.min(1.16, speechProfile.expressionIntensity + 0.08), { persist: false });
+                    startLipSync(speechText, speechDuration, request.phonemes);
+                };
+
+                utterance.onend = function() {
+                    isSpeaking = false;
+                    currentUtterance = null;
+                    stopLipSync();
+                    setTimeout(function() {
+                        setExpression(restingExpressionName, 1.0, { persist: false });
+                    }, 180);
+                    postFlutterSpeechComplete(requestId);
+                };
+
+                utterance.onerror = function(event) {
+                    console.error('Speech synthesis error:', event.error || event);
+                    isSpeaking = false;
+                    currentUtterance = null;
+                    postFlutterSpeechError(requestId, String(event.error || 'Browser speech synthesis error'));
+                };
+
+                currentUtterance = utterance;
+                postFlutterSpeechEngine(requestId, 'browser_speech');
+                window.speechSynthesis.speak(utterance);
+
+                setTimeout(() => {
+                    if (!lipSyncActive && currentUtterance === utterance) {
+                        console.log('Forcing lip sync start (onstart delayed)');
+                        startLipSync(speechText, speechDuration, request.phonemes);
+                    }
+                }, 100);
+
+                return true;
+            }
+
+            if (window.speechSynthesis && !ALLOW_BROWSER_SPEECH_FALLBACK) {
+                console.warn('[FALLBACK] browser speech disabled for quality; append ?browser_fallback=1 to enable');
+            }
+
+            // Priority 3: Flutter native TTS fallback (offline last resort).
+            const hasFlutter = window.Flutter && typeof window.Flutter.postMessage === 'function';
+            if (hasFlutter && ALLOW_NATIVE_TTS_FALLBACK) {
+                console.warn('[FALLBACK] ▶ Speaking via Flutter native TTS (last resort, may have static)');
+                const nativeFallbackProfile = {
+                    ...speechProfile,
+                    volume: Math.min(0.88, Math.max(0, Number(speechProfile?.volume || 1.0))),
+                };
+                setExpression(expression, Math.min(1.12, speechProfile.expressionIntensity + 0.06), { persist: false });
+                postFlutterSpeechEngine(requestId, 'native_tts');
+                requestFlutterNativeTts(
+                    speechText,
+                    expression,
+                    nativeFallbackProfile,
+                    request.phonemes,
+                    requestId,
+                );
+                return true;
+            }
+
+            if (hasFlutter) {
+                console.warn('[FALLBACK] native_tts disabled for quality; append ?native_fallback=1 to enable');
+            }
+
+            postFlutterSpeechError(requestId, 'No speech engine available');
+            return false;
+        }
+
+        function normalizeModeId(modeId) {
+            if (modeId === null || modeId === undefined) {
+                return null;
+            }
+
+            const parsed = Number(modeId);
+            return Number.isFinite(parsed) ? parsed : null;
+        }
+
+        function computeSentimentSignal(metadata, text) {
+            if (metadata && metadata.sentiment) {
+                const sentiment = metadata.sentiment;
+                const pos = Number(sentiment.pos || 0);
+                const neu = Number(sentiment.neu || 0);
+                const neg = Number(sentiment.neg || 0);
+
+                if (pos >= neu && pos >= neg) return 1;
+                if (neg >= neu && neg >= pos) return -1;
+                return 0;
+            }
+
+            const normalized = (text || '').toLowerCase();
+            const positiveHits = [
+                'great', 'excellent', 'awesome', 'nice', 'well done', 'correct',
+                'good job', 'amazing', 'perfect', 'fantastic'
+            ].reduce((count, token) => count + (normalized.includes(token) ? 1 : 0), 0);
+            const negativeHits = [
+                'incorrect', 'wrong', 'mistake', 'careful', 'warning', 'sorry',
+                'try again', 'not quite', 'error'
+            ].reduce((count, token) => count + (normalized.includes(token) ? 1 : 0), 0);
+
+            if (positiveHits > negativeHits) return 1;
+            if (negativeHits > positiveHits) return -1;
+            return 0;
+        }
+
+        function inferEmotionFromDesktopMode(modeId, sentimentSignal) {
+            switch (modeId) {
+                case 0:
+                    return sentimentSignal === -1 ? 'disgust' : sentimentSignal === 0 ? 'fear' : 'happy';
+                case 1:
+                    return sentimentSignal === -1 ? 'anger' : sentimentSignal === 0 ? 'sad' : 'happy';
+                case 2:
+                    return sentimentSignal === -1 ? 'anger' : 'surprise';
+                case 3:
+                    return sentimentSignal === -1 ? 'fear' : sentimentSignal === 0 ? 'sad' : 'surprise';
+                default:
+                    return null;
+            }
+        }
+
+        function getSpeechProfile(emotionName) {
+            return EMOTION_SPEECH_PROFILES[emotionName] || EMOTION_SPEECH_PROFILES.neutral;
+        }
+
+        function parseSpeechRequest(textInput, optionsOrEmotion) {
+            const options = optionsOrEmotion && typeof optionsOrEmotion === 'object' && !Array.isArray(optionsOrEmotion)
+                ? optionsOrEmotion
+                : {};
+            const text = typeof textInput === 'string'
+                ? textInput
+                : typeof options.text === 'string'
+                    ? options.text
+                    : '';
+            const explicitEmotion = typeof optionsOrEmotion === 'string'
+                ? optionsOrEmotion
+                : typeof options.emotion === 'string'
+                    ? options.emotion
+                    : null;
+            const modeId = normalizeModeId(options.modeId);
+            const sentimentSignal = computeSentimentSignal(options, text);
+            const fuzzyEmotion = modeId === null ? null : inferEmotionFromDesktopMode(modeId, sentimentSignal);
+            const inferredEmotion = explicitEmotion || fuzzyEmotion || inferEmotionFromText(text, options) || 'neutral';
+            const phonemes = Array.isArray(options.phonemes) ? options.phonemes : null;
+            const speechProfile = getSpeechProfile(String(inferredEmotion).toLowerCase());
+
+            return {
+                text: text.trim(),
+                emotion: String(inferredEmotion).toLowerCase(),
+                phonemes,
+                speechProfile,
+                modeId,
+                sentimentSignal
+            };
+        }
+
+        function detectDeviceProfile() {
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            const memory = navigator.deviceMemory || 4;
+            const cores = navigator.hardwareConcurrency || 4;
+            const connectionType = navigator.connection?.effectiveType || '4g';
+            const prefersReducedMotion = !!window.matchMedia &&
+                window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            const slowConnection = ['slow-2g', '2g', '3g'].includes(connectionType);
+            const isLowEnd = isMobile && (memory <= 4 || cores <= 4 || slowConnection || prefersReducedMotion);
+
+            return {
+                isMobile,
+                isLowEnd,
+                memory,
+                cores,
+                connectionType,
+                prefersReducedMotion,
+                // Aggressively restrict pixel ratio on mobile to save fragment shader GPU/CPU time,
+                // which prevents the render thread from starving the Android audio thread.
+                pixelRatio: isLowEnd ? 0.8 : isMobile ? 1.0 : Math.min(window.devicePixelRatio || 1, 2),
+                targetFPS: isLowEnd ? 30 : isMobile ? 45 : 60,
+                animationSpeed: isLowEnd ? 6 : isMobile ? 8 : 12,
+                antialias: !isLowEnd && !isMobile,
+                ambientLight: isLowEnd ? 0.54 : 0.6,
+                keyLight: isLowEnd ? 0.72 : 0.8,
+                fillLight: isLowEnd ? 0.22 : 0.3,
+                rimLight: isLowEnd ? 0.32 : 0.5
+            };
+        }
+
+        function ensureMorphBuffers(mesh) {
+            if (!mesh || !mesh.morphTargetInfluences) {
+                return;
+            }
+
+            const influenceCount = mesh.morphTargetInfluences.length;
+            if (!mesh.userData.currentInfluences || mesh.userData.currentInfluences.length !== influenceCount) {
+                mesh.userData.currentInfluences = Array.from(mesh.morphTargetInfluences, value => value || 0);
+            }
+            if (!mesh.userData.targetInfluences || mesh.userData.targetInfluences.length !== influenceCount) {
+                mesh.userData.targetInfluences = Array.from(mesh.userData.currentInfluences);
+            }
+        }
+
+        function getLipIndices(dictionary) {
+            const lipIndices = new Set();
+            LIP_SHAPES.forEach(shape => {
+                const idx = resolveMorphIndex(dictionary, shape);
+                if (idx >= 0) {
+                    lipIndices.add(idx);
+                }
+            });
+            const lipCloseIdx = resolveMorphIndex(dictionary, 'lip_close');
+            if (lipCloseIdx >= 0) lipIndices.add(lipCloseIdx);
+            return lipIndices;
+        }
+
+        function getExpressionProfile(expressionName, intensity) {
+            const normalizedExpression = (expressionName || 'neutral').toLowerCase();
+            const baseProfile = DESKTOP_EXPRESSION_PROFILES[normalizedExpression] || { [normalizedExpression]: 1.0 };
+            const strength = EXPRESSION_STRENGTH[normalizedExpression] || 1.0;
+            const scaledProfile = {};
+
+            Object.entries(baseProfile).forEach(([name, value]) => {
+                // Hard cap at 1.0 — morph target influences above 1.0 push
+                // vertices beyond their designed positions, causing the uncanny
+                // stretched-face distortion visible in the 'laugh' morph.
+                scaledProfile[name] = Math.max(0, Math.min(1.0, value * intensity * strength));
+            });
+
+            return scaledProfile;
+        }
+
+        function resetExpressionTargets(mesh, lipIndices) {
+            ensureMorphBuffers(mesh);
+            mesh.userData.targetInfluences.forEach((_, index) => {
+                if (!lipIndices.has(index)) {
+                    mesh.userData.targetInfluences[index] = 0;
+                }
+            });
+        }
+
+        function setRestingLipTargets(mesh) {
+            ensureMorphBuffers(mesh);
+            const dictionary = mesh.morphTargetDictionary;
+            if (!dictionary) {
+                return;
+            }
+
+            LIP_SHAPES.forEach(shape => {
+                const idx = resolveMorphIndex(dictionary, shape);
+                if (idx >= 0) {
+                    mesh.userData.targetInfluences[idx] = 0;
+                }
+            });
+
+            // Also zero lip_close so it doesn't pull upper lip into lower lip
+            const lipCloseIdx = resolveMorphIndex(dictionary, 'lip_close');
+            if (lipCloseIdx >= 0) {
+                mesh.userData.targetInfluences[lipCloseIdx] = 0;
+            }
+        }
+
+        function setRestingLipPose(forceImmediate) {
+            morphMeshes.forEach(mesh => {
+                ensureMorphBuffers(mesh);
+                setRestingLipTargets(mesh);
+
+                if (forceImmediate) {
+                    mesh.userData.currentInfluences = Array.from(mesh.userData.targetInfluences);
+                    mesh.userData.currentInfluences.forEach((value, index) => {
+                        mesh.morphTargetInfluences[index] = value;
+                    });
+                }
+            });
+        }
+
+        // ============================================
+        // INITIALIZATION
+        // ============================================
+        function init() {
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth || window.innerWidth;
+            const height = container.clientHeight || window.innerHeight;
+            deviceProfile = detectDeviceProfile();
+            // Azure Neural TTS is preferred for high-quality audio;
+            // native flutter_tts is used only as offline/error fallback.
+            preferNativeTts = false;
+            console.log('Device profile:', JSON.stringify(deviceProfile));
+
+            // Scene - match desktop renderer visuals
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x1a1a1a);
+
+            // Camera - desktop-like framing
+            camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
+            camera.position.set(0, 50, 400);
+            camera.lookAt(0, 0, 0);
+
+            // Renderer: logarithmic depth buffer is disabled because it forces
+            // gl_FragDepth modifications in shaders, breaking early-Z rejection
+            // and massively reducing performance on tile-based mobile GPUs (and emulators).
+            renderer = new THREE.WebGLRenderer({
+                antialias: deviceProfile.antialias,
+                alpha: false,
+                stencil: false,
+                powerPreference: 'high-performance',
+                precision: 'mediump', // 'highp' is overkill for the avatar and hurts emulator perf
+                logarithmicDepthBuffer: false
+            });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(deviceProfile.pixelRatio);
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.setClearColor(0x1a1a1a, 1);
+            renderer.sortObjects = true;
+            container.appendChild(renderer.domElement);
+
+            // Lighting - match desktop warm natural look
+            const ambientLight = new THREE.AmbientLight(0xfff5e6, deviceProfile.ambientLight);
+            scene.add(ambientLight);
+
+            const keyLight = new THREE.DirectionalLight(0xfff9f0, deviceProfile.keyLight);
+            keyLight.position.set(0, 100, 300);
+            scene.add(keyLight);
+
+            const fillLight = new THREE.DirectionalLight(0xe6f0ff, deviceProfile.fillLight);
+            fillLight.position.set(-150, 50, 150);
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0xffffff, deviceProfile.rimLight);
+            rimLight.position.set(100, 80, -150);
+            scene.add(rimLight);
+
+            // Load avatar
+            loadAvatar();
+
+            // Handle resize
+            window.addEventListener('resize', onResize);
+
+            // Start render loop
+            animate();
+
+            // ── Audio pipeline warm-up ──
+            // On Android, the first audio playback through AudioContext causes
+            // On Android, the first Audio element playback can cause a small
+            // pop while the OS activates the MediaPlayer audio session.
+            // We prime the pipeline by loading a tiny silent WAV.
+            function warmUpAudioPipeline() {
+                try {
+                    // Create a minimal valid WAV (44 bytes header + 4 bytes silence)
+                    // at 48kHz 16-bit mono — matches our optimized Azure TTS output.
+                    const wavHeader = new Uint8Array([
+                        0x52,0x49,0x46,0x46, // "RIFF"
+                        0x2A,0x00,0x00,0x00, // file size - 8 = 42
+                        0x57,0x41,0x56,0x45, // "WAVE"
+                        0x66,0x6D,0x74,0x20, // "fmt "
+                        0x10,0x00,0x00,0x00, // chunk size = 16
+                        0x01,0x00,            // PCM format
+                        0x01,0x00,            // 1 channel
+                        0x80,0xBB,0x00,0x00, // 48000 Hz
+                        0x00,0x77,0x01,0x00, // byte rate = 96000
+                        0x02,0x00,            // block align = 2
+                        0x10,0x00,            // 16 bits per sample
+                        0x64,0x61,0x74,0x61, // "data"
+                        0x04,0x00,0x00,0x00, // data size = 4 bytes (2 samples)
+                        0x00,0x00,0x00,0x00  // 2 silent samples
+                    ]);
+                    const blob = new Blob([wavHeader], { type: 'audio/wav' });
+                    const url = URL.createObjectURL(blob);
+                    const a = new Audio();
+                    a.volume = 0;
+                    a.src = url;
+                    a.play().then(function() {
+                        a.onended = function() {
+                            URL.revokeObjectURL(url);
+                            console.log('[Audio] MediaPlayer warm-up complete');
+                        };
+                    }).catch(function(e) {
+                        URL.revokeObjectURL(url);
+                        console.warn('[Audio] MediaPlayer warm-up skipped:', e);
+                    });
+                } catch (e) {
+                    console.warn('[Audio] Warm-up failed:', e);
+                }
+            }
+            window.warmUpAudioPipeline = warmUpAudioPipeline;
+
+            // Warm up immediately (works on Android WebView where autoplay
+            // is allowed via setMediaPlaybackRequiresUserGesture(false))
+            warmUpAudioPipeline();
+
+            // Also warm up on the first user touch (required by Chrome autoplay
+            // policy on iOS WebKit where AudioContext starts suspended)
+            document.addEventListener('touchstart', function _warmOnTouch() {
+                document.removeEventListener('touchstart', _warmOnTouch);
+                warmUpAudioPipeline();
+            }, { once: true, passive: true });
+        }
+
+        // ============================================
+        // AVATAR LOADING
+        // ============================================
+        function loadAvatar() {
+            const loader = new THREE.GLTFLoader();
+            
+            // Get gender from URL parameter (default to female)
+            const urlParams = new URLSearchParams(window.location.search);
+            const gender = urlParams.get('gender') || 'female';
+            const modelUrl = gender === 'male' ? 'models/male_avatar.glb' : 'models/avatar_female.glb';
+            
+            console.log('Loading avatar:', modelUrl, 'gender:', gender);
+
+            loader.load(
+                modelUrl,
+                function(gltf) {
+                    avatar = gltf.scene;
+                    
+                    // =====================================================
+                    // MATCH DESKTOP: No scaling, just center it
+                    // =====================================================
+                    avatar.scale.set(1.0, 1.0, 1.0);
+                    
+                    const box = new THREE.Box3().setFromObject(avatar);
+                    const center = box.getCenter(new THREE.Vector3());
+                    avatar.position.set(-center.x, -center.y - 20, 0); // -20 pushes down to center in the box
+                    
+                    console.log('Avatar centered at:', -center.x, -center.y - 20, 0);
+                    
+                    // Process all meshes
+                    avatar.traverse(function(node) {
+                        if (node.isMesh) {
+                            if (node.material) {
+                                const materials = Array.isArray(node.material) ? node.material : [node.material];
+                                materials.forEach((mat, idx) => {
+                                    // =====================================================
+                                    // FIX BLACK GASH & MATCH DESKTOP MATERIALS
+                                    // =====================================================
+                                    mat.flatShading = false;
+                                    mat.side = THREE.FrontSide; // Render front only like desktop
+                                    mat.transparent = true;
+                                    mat.alphaTest = 0.5;  // CRITICAL: Discard low-alpha pixels (fixes gash!)
+                                    mat.depthTest = true;
+                                    mat.depthWrite = true;
+                                    mat.morphTargets = true;
+                                    mat.morphNormals = true;
+                                    
+                                    const isHair = node.name.toLowerCase().includes('hair') || 
+                                                   node.name.toLowerCase().includes('texture1');
+                                                   
+                                    if (mat.color) {
+                                        const hsl = {};
+                                        mat.color.getHSL(hsl);
+                                        
+                                        if (isHair) {
+                                            const newS = Math.min(hsl.s * 3.0, 1.0);
+                                            const newL = hsl.l * 1.5;
+                                            mat.color.setHSL(hsl.h, newS, newL);
+                                            
+                                            if (mat.emissive) {
+                                                mat.emissive.setHSL(hsl.h, newS * 0.7, newL * 0.4);
+                                                mat.emissiveIntensity = 0.5;
+                                            }
+                                        } else {
+                                            const newS = Math.min(hsl.s * 1.2, 1.0);
+                                            const newL = Math.min(hsl.l * 1.1, 0.8);
+                                            mat.color.setHSL(hsl.h, newS, newL);
+                                        }
+                                    }
+                                    
+                                    if (mat.metalness !== undefined) mat.metalness = 0.0;
+                                    if (mat.roughness !== undefined) mat.roughness = isHair ? 0.6 : 0.95;
+                                    if (!isHair && mat.thickness !== undefined) mat.thickness = 0.5;
+                                    
+                                    // DEBUG: If no texture, apply a visible color based on material name
+                                    if (!mat.map) {
+                                        const name = (mat.name || '').toLowerCase();
+                                        if (name.includes('skin') || name.includes('head') || name.includes('body') || name.includes('arm')) {
+                                            mat.color = new THREE.Color(0.9, 0.75, 0.65); // Skin tone
+                                        } else if (name.includes('hair') || name.includes('scalp') || name.includes('beard') || name.includes('stubble') || name.includes('bushy') || name.includes('mustache')) {
+                                            mat.color = new THREE.Color(0.15, 0.1, 0.08); // Dark brown hair
+                                        } else if (name.includes('eye') && !name.includes('lash') && !name.includes('occlusion')) {
+                                            mat.color = new THREE.Color(1, 1, 1); // White of eye
+                                        } else if (name.includes('cornea')) {
+                                            mat.color = new THREE.Color(0.4, 0.25, 0.15); // Brown iris
+                                            mat.transparent = true;
+                                            mat.opacity = 0.9;
+                                        } else if (name.includes('teeth') || name.includes('tongue')) {
+                                            mat.color = new THREE.Color(0.95, 0.92, 0.88); // Teeth white
+                                        } else if (name.includes('lash') || name.includes('brow')) {
+                                            mat.color = new THREE.Color(0.1, 0.08, 0.06); // Dark lashes
+                                        } else if (name.includes('occlusion') || name.includes('tear')) {
+                                            mat.visible = false; // Hide occlusion meshes
+                                        }
+                                        console.log('Applied fallback color to:', mat.name);
+                                    }
+                                    
+                                    mat.needsUpdate = true;
+                                    
+                                    console.log('Material fixed:', mat.name || idx);
+                                });
+                            }
+                            
+                            // Collect meshes with morph targets
+                            if (node.morphTargetInfluences && node.morphTargetDictionary) {
+                                console.log('Found morph mesh:', node.name, Object.keys(node.morphTargetDictionary).join(','));
+                                
+                                // Initialize morph influences to 0
+                                for (let i = 0; i < node.morphTargetInfluences.length; i++) {
+                                    node.morphTargetInfluences[i] = 0;
+                                }
+
+                                ensureMorphBuffers(node);
+                                
+                                morphMeshes.push(node);
+                            }
+                        }
+                    });
+
+                    scene.add(avatar);
+                    console.log('Avatar loaded with', morphMeshes.length, 'morph meshes');
+
+                    // Position camera to show head and shoulders
+                    fitCameraToAvatar();
+
+                    // Hide loading
+                    document.getElementById('loading').style.display = 'none';
+                    
+                    isReady = true;
+                    console.log('Avatar ready');
+                    setRestingLipPose(true);
+                    setExpression('neutral', 1.0, { persist: true, immediate: true });
+
+                    // Signal ready to Flutter
+                    if (window.Flutter) {
+                        window.Flutter.postMessage('ready');
+                    }
+                },
+                function(progress) {
+                    if (progress.total > 0) {
+                        const percent = Math.round((progress.loaded / progress.total) * 100);
+                        document.getElementById('loading').textContent = 'Loading: ' + percent + '%';
+                    }
+                },
+                function(error) {
+                    console.error('Error loading avatar:', error);
+                    document.getElementById('loading').textContent = 'Error loading avatar';
+                }
+            );
+        }
+
+        // ============================================
+        // CAMERA POSITIONING - MATCH DESKTOP
+        // ============================================
+        function fitCameraToAvatar() {
+            if (!avatar) return;
+            
+            // Desktop uses fixed camera position
+            camera.position.set(0, 50, 400);
+            camera.lookAt(0, 0, 0);
+            
+            camera.near = 0.1;
+            camera.far = 1000;
+            camera.updateProjectionMatrix();
+
+            console.log('Camera matched to desktop: (0, 50, 400)');
+        }
+
+        // ============================================
+        // EXPRESSION CONTROL - THE CORE FIX
+        // ============================================
+        function setExpression(expressionName, intensity, options) {
+            options = options || {};
+            intensity = intensity !== undefined ? intensity : 1.0;
+            console.log('=== setExpression:', expressionName, 'intensity:', intensity, '===');
+            
+            if (!isReady) {
+                console.warn('Avatar not ready yet');
+                return false;
+            }
+
+            if (morphMeshes.length === 0) {
+                console.error('No morph meshes available!');
+                return false;
+            }
+
+            const lowerExpr = expressionName.toLowerCase();
+            const targetProfile = getExpressionProfile(lowerExpr, intensity);
+
+            if (options.persist !== false) {
+                restingExpressionName = lowerExpr;
+            }
+
+            console.log('Target profile for', expressionName + ':', JSON.stringify(targetProfile));
+
+            let success = false;
+
+            morphMeshes.forEach((mesh, meshIdx) => {
+                const influences = mesh.morphTargetInfluences;
+                const dictionary = mesh.morphTargetDictionary;
+
+                if (!influences || !dictionary) {
+                    console.warn('Mesh', mesh.name, 'missing morph data');
+                    return;
+                }
+
+                ensureMorphBuffers(mesh);
+                const lipIndices = getLipIndices(dictionary);
+                resetExpressionTargets(mesh, lipIndices);
+
+                Object.entries(targetProfile).forEach(([morphName, value]) => {
+                    const idx = resolveMorphIndex(dictionary, morphName);
+                        if (idx >= 0) {
+                            mesh.userData.targetInfluences[idx] = Math.max(mesh.userData.targetInfluences[idx], value);
+                            console.log('Applied', morphName, '=', value, 'on', mesh.name, 'idx=' + idx + ' mesh=' + meshIdx);
+                            success = true;
+                        }
+                });
+
+                if (options.immediate) {
+                    mesh.userData.currentInfluences = Array.from(mesh.userData.targetInfluences);
+                    mesh.userData.currentInfluences.forEach((value, index) => {
+                        mesh.morphTargetInfluences[index] = value;
+                    });
+                    if (mesh.geometry) {
+                        mesh.geometry.attributes.position.needsUpdate = true;
+                        if (mesh.geometry.attributes.normal) {
+                            mesh.geometry.attributes.normal.needsUpdate = true;
+                        }
+                    }
+                }
+            });
+
+            // Force a render
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
+
+            console.log('Expression result:', success ? 'SUCCESS' : 'NO MATCH FOUND');
+            return success;
+        }
+
+        function updateMorphTargets(deltaTime) {
+            let needsRender = false;
+            // Desktop original: expr_anim trans_dur=0.3, stat_dur=0.1.
+            // Speed 8 gives ~95% convergence in 0.3s, matching Kitty's
+            // Hermite smoothstep expression transition duration.
+            const blendFactor = Math.min(1, deltaTime * (deviceProfile?.animationSpeed || 8));
+
+            morphMeshes.forEach(mesh => {
+                ensureMorphBuffers(mesh);
+                const currentInfluences = mesh.userData.currentInfluences;
+                const targetInfluences = mesh.userData.targetInfluences;
+
+                // During active lip sync, skip lip morph indices — the lip
+                // animator writes those directly via applyLipValues().
+                let skipIndices = null;
+                if (lipSyncActive) {
+                    const dict = mesh.morphTargetDictionary;
+                    if (dict) {
+                        skipIndices = getLipIndices(dict);
+                    }
+                }
+
+                for (let i = 0; i < targetInfluences.length; i++) {
+                    if (skipIndices && skipIndices.has(i)) continue;
+
+                    const current = currentInfluences[i] || 0;
+                    const target = targetInfluences[i] || 0;
+                    const next = Math.abs(target - current) < 0.002
+                        ? target
+                        : current + (target - current) * blendFactor;
+
+                    if (Math.abs(next - current) > 0.0005) {
+                        currentInfluences[i] = next;
+                        mesh.morphTargetInfluences[i] = next;
+                        needsRender = true;
+                    }
+                }
+
+                if (needsRender && mesh.geometry) {
+                    mesh.geometry.attributes.position.needsUpdate = true;
+                    if (mesh.geometry.attributes.normal) {
+                        mesh.geometry.attributes.normal.needsUpdate = true;
+                    }
+                }
+            });
+
+            return needsRender;
+        }
+
+        // ============================================
+        // ANIMATION LOOP
+        // ============================================
+        function animate(timestamp) {
+            requestAnimationFrame(animate);
+            // During speech, aggressively throttle rendering to 18 FPS to reduce CPU
+            // contention with the Web Audio / MediaPlayer thread. Audio buffer underruns
+            // from GPU/render competition are the primary cause of crackling on Android emulators.
+            const speakingMode = isSpeaking || lipSyncActive;
+            const targetFPS = speakingMode ? 18 : (deviceProfile?.targetFPS || 60);
+            const frameInterval = 1000 / targetFPS;
+            if (timestamp && timestamp - lastRenderTimestamp < frameInterval) {
+                return;
+            }
+            lastRenderTimestamp = timestamp || performance.now();
+
+            const deltaTime = Math.min(clock.getDelta(), 0.05);
+            updateMorphTargets(deltaTime);
+            
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
+        }
+
+        // ============================================
+        // RESIZE HANDLER
+        // ============================================
+        function onResize() {
+            const container = document.getElementById('canvas-container');
+            const width = container.clientWidth || window.innerWidth;
+            const height = container.clientHeight || window.innerHeight;
+
+            camera.aspect = width / height;
+            camera.updateProjectionMatrix();
+            renderer.setSize(width, height);
+        }
+
+        // ============================================
+        // LIP SYNC
+        // ============================================
+        let lipSyncActive = false;
+        let lipSyncPhones = [];
+        let lipSyncDuration = 0;
+        let lipSyncStartTime = 0;
+        let lipSyncFrameId = null;
+        let lipSyncCurrentIndex = -1;
+        let lipSyncProgressHint = 0;
+        let lipSyncRateScale = 1.0;
+        let lastLipAnimTime = 0;
+        let lipSyncAudioElement = null;  // HTML5 Audio element for precise timing
+
+        function syncLipProgress(progress) {
+            if (!lipSyncActive || lipSyncDuration <= 0) {
+                return false;
+            }
+
+            const elapsed = (Date.now() - lipSyncStartTime) / 1000;
+            const scaledElapsed = elapsed * lipSyncRateScale;
+            const estimatedProgress = scaledElapsed / lipSyncDuration;
+            const actualProgress = clamp01(progress);
+
+            // If TTS is still speaking but our duration estimate has been
+            // reached, extend the lip-sync duration so lips keep moving.
+            if (actualProgress < 0.92 && estimatedProgress > 0.90) {
+                const newDuration = elapsed / Math.max(actualProgress, 0.05);
+                lipSyncDuration = Math.max(lipSyncDuration, newDuration);
+                lipAnimator.transDur = Math.max(lipSyncDuration / Math.max(lipSyncPhones.length, 1), 0.08);
+            }
+
+            // Adjust playback rate so lip-sync converges with actual TTS position.
+            // This corrects both too-fast and too-slow animation.
+            if (estimatedProgress > 0.02 && actualProgress > 0.01) {
+                const ratio = actualProgress / estimatedProgress;
+                lipSyncRateScale = lipSyncRateScale * 0.6 + (lipSyncRateScale * ratio) * 0.4;
+                lipSyncRateScale = Math.max(0.3, Math.min(2.5, lipSyncRateScale));
+            }
+
+            lipSyncProgressHint = actualProgress;
+            return true;
+        }
+
+        function getPhonemes(text, providedPhonemes) {
+            if (Array.isArray(providedPhonemes) && providedPhonemes.length > 0) {
+                return providedPhonemes
+                    .map(phone => {
+                        const normalized = String(phone || '').trim().toUpperCase();
+                        return DESKTOP_ARPABET_MAPPING[normalized] || null;
+                    })
+                    .filter(Boolean);
+            }
+
+            text = text.toLowerCase();
+            const phonemes = [];
+            const words = text.split(/\s+/);
+
+            // Common English multi-letter patterns → lip shapes
+            const ENGLISH_PATTERNS = {
+                'tion': ['ch_j_sh', 'eh', 'n'],
+                'sion': ['ch_j_sh', 'eh', 'n'],
+                'ough': ['oh', 'f_v'],
+                'ight': ['small_aah', 'd_s_t'],
+                'ould': ['ooh_q', 'n', 'd_s_t'],
+                'ious': ['ee', 'eh', 'd_s_t'],
+                'ness': ['n', 'eh', 'd_s_t'],
+                'ment': ['b_m_p', 'eh', 'n', 'd_s_t'],
+                'ing': ['i', 'n'],
+                'tch': ['ch_j_sh'],
+                'dge': ['ch_j_sh'],
+                'ght': ['d_s_t'],
+                'ck': ['k'],
+                'qu': ['k', 'w'],
+            };
+
+            for (let wordIdx = 0; wordIdx < words.length; wordIdx++) {
+                const word = words[wordIdx].replace(/[.,!?;:'"()\[\]{}]/g, '');
+                if (!word) continue;
+
+                let i = 0;
+                while (i < word.length) {
+                    let matched = false;
+
+                    // Try 4-char, 3-char English patterns first
+                    for (const len of [4, 3, 2]) {
+                        if (i + len <= word.length) {
+                            const substr = word.substring(i, i + len);
+                            if (ENGLISH_PATTERNS[substr]) {
+                                ENGLISH_PATTERNS[substr].forEach(p => phonemes.push(p));
+                                i += len;
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched) continue;
+
+                    const char = word[i];
+                    const twoChar = i + 2 <= word.length ? word.substring(i, i + 2) : '';
+                    const isVowel = 'aeiou'.includes(char);
+
+                    // Try two-char mapping (digraphs: th, sh, ch, ee, oo, etc.)
+                    if (twoChar && DESKTOP_TEXT_MAPPING[twoChar]) {
+                        phonemes.push(DESKTOP_TEXT_MAPPING[twoChar]);
+                        // Double vowels get held longer for natural feel
+                        if (isVowel) phonemes.push(DESKTOP_TEXT_MAPPING[twoChar]);
+                        i += 2;
+                        continue;
+                    }
+
+                    // Single character mapping
+                    const shape = DESKTOP_TEXT_MAPPING[char] || PHONEME_MAPPING[char];
+                    if (shape) {
+                        phonemes.push(shape);
+                        // Vowels are the core of syllables — hold them longer
+                        if (isVowel) phonemes.push(shape);
+                        i += 1;
+                    } else {
+                        i += 1;
+                    }
+                }
+                // Word boundary: brief mouth closure between words
+                if (wordIdx < words.length - 1) {
+                    phonemes.push('b_m_p');
+                }
+            }
+            return phonemes;
+        }
+
+        function clamp01(value) {
+            return Math.max(0, Math.min(1, value));
+        }
+
+        // ==========================================================
+        // LIP ANIMATOR — Direct port of Kitty's Animator state machine
+        // ==========================================================
+        // Original desktop (Animator.py):
+        //   - Hermite smoothstep:  t = 6*t^5 - 15*t^4 + 10*t^3
+        //   - State machine:       'trans' -> 'stat' -> 'trans'
+        //   - trans_dur:           audio_duration / num_phonemes
+        //   - stat_dur:            0.001 (essentially instant hold)
+        //   - One lip shape active at a time
+        //   - Per-vertex variance-weighted blending separates expression/lip
+        //
+        // On mobile we can't do per-vertex blending, so we use moderate
+        // lip intensity (~0.55) and directly write lip morph values,
+        // bypassing the slower global updateMorphTargets blend.
+        const BASE_LIP_INTENSITY = 0.85; // Increased for more expressive lip sync
+
+        const lipAnimator = {
+            state: 'idle',     // 'idle' | 'trans' | 'stat'
+            cycleTime: 0,
+            transDur: 0.1,     // set per-session to duration / numPhones
+            statDur: 0.001,    // matches original
+            curr: {},          // current lip shape values (all 16 shapes)
+            target: {},        // target lip shape values
+
+            reset() {
+                this.state = 'idle';
+                this.cycleTime = 0;
+                LIP_SHAPES.forEach(s => {
+                    this.curr[s] = 0;
+                    this.target[s] = 0;
+                });
+            },
+
+            // Hermite smoothstep — identical to Animator.interp_face()
+            //   t_smooth = 6t^5 - 15t^4 + 10t^3
+            // Zero derivative at t=0 and t=1 → smooth accel/decel
+            hermite(t) {
+                t = Math.max(0, Math.min(1, t));
+                const t3 = t * t * t;
+                const t4 = t3 * t;
+                const t5 = t4 * t;
+                return 6 * t5 - 15 * t4 + 10 * t3;
+            },
+
+            // Called when phoneme index changes (like Combiner calling
+            // lip_anim.set_target when TextManager says "changed")
+            setPhonemeTarget(shapeName) {
+                // Snapshot current interpolated position
+                LIP_SHAPES.forEach(s => {
+                    this.curr[s] = this.getInterpolatedValue(s);
+                });
+                // New target: zero all, set active phoneme
+                LIP_SHAPES.forEach(s => { this.target[s] = 0; });
+                if (shapeName && LIP_SHAPE_STRENGTH[shapeName] !== undefined) {
+                    this.target[shapeName] = BASE_LIP_INTENSITY * LIP_SHAPE_STRENGTH[shapeName];
+                }
+                
+                // Fix for abrupt jaw drops: ensure jaw opening takes longer
+                this.actualTransDur = this.transDur;
+                if (shapeName && ['big_aah', 'small_aah', 'oh', 'eh'].includes(shapeName)) {
+                    // Force jaw drops to take at least 120ms to prevent snapping
+                    this.actualTransDur = Math.max(this.transDur * 1.5, 0.12);
+                }
+                
+                this.state = 'trans';
+                this.cycleTime = 0;
+            },
+
+            getInterpolatedValue(shapeName) {
+                const dur = this.actualTransDur || this.transDur;
+                if (this.state !== 'trans' || dur <= 0) {
+                    return this.curr[shapeName] || 0;
+                }
+                const t = this.hermite(this.cycleTime / dur);
+                const c = this.curr[shapeName] || 0;
+                const tgt = this.target[shapeName] || 0;
+                return (1 - t) * c + t * tgt;
+            },
+
+            // Called every frame with delta-time — mirrors Animator.get_verts(dt)
+            getValues(dt) {
+                if (this.state === 'idle') return this.curr;
+
+                this.cycleTime += dt;
+                const dur = this.actualTransDur || this.transDur;
+
+                if (this.state === 'trans') {
+                    if (this.cycleTime >= dur) {
+                        // Transition complete — snap to target
+                        LIP_SHAPES.forEach(s => {
+                            this.curr[s] = this.target[s];
+                        });
+                        this.state = 'stat';
+                        this.cycleTime = 0;
+                        return this.curr;
+                    }
+                    // Hermite interpolation between curr and target
+                    const t = this.hermite(this.cycleTime / dur);
+                    const result = {};
+                    LIP_SHAPES.forEach(s => {
+                        const c = this.curr[s] || 0;
+                        const tgt = this.target[s] || 0;
+                        result[s] = (1 - t) * c + t * tgt;
+                    });
+                    return result;
+                }
+
+                if (this.state === 'stat') {
+                    // Hold complete after stat_dur — stay until next
+                    // setPhonemeTarget() call
+                    return this.curr;
+                }
+
+                return this.curr;
+            }
+        };
+
+        // Write lip animator values directly to morphTargetInfluences,
+        // bypassing the global updateMorphTargets blend (which is too slow
+        // for phoneme-rate changes).
+        function applyLipValues(lipValues) {
+            if (!isReady || morphMeshes.length === 0) return;
+            morphMeshes.forEach(mesh => {
+                const dictionary = mesh.morphTargetDictionary;
+                if (!dictionary) return;
+                ensureMorphBuffers(mesh);
+                LIP_SHAPES.forEach(shape => {
+                    const idx = resolveMorphIndex(dictionary, shape);
+                    if (idx >= 0) {
+                        const val = lipValues[shape] || 0;
+                        mesh.morphTargetInfluences[idx] = val;
+                        mesh.userData.currentInfluences[idx] = val;
+                        mesh.userData.targetInfluences[idx] = val;
+                    }
+                });
+                // Keep lip_close at zero during speech
+                const lipCloseIdx = resolveMorphIndex(dictionary, 'lip_close');
+                if (lipCloseIdx >= 0) {
+                    mesh.morphTargetInfluences[lipCloseIdx] = 0;
+                    mesh.userData.currentInfluences[lipCloseIdx] = 0;
+                    mesh.userData.targetInfluences[lipCloseIdx] = 0;
+                }
+            });
+        }
+
+        function phoneIntensity(shapeName) {
+            return BASE_LIP_INTENSITY;
+        }
+
+        function startLipSync(text, duration, providedPhonemes, audioElement) {
+            lipSyncPhones = getPhonemes(text, providedPhonemes);
+            if (!lipSyncPhones.length) {
+                lipSyncPhones = ['b_m_p', 'small_aah', 'oh', 'b_m_p'];
+            }
+            const desktopDurationFloor = (String(text || '').trim().length / 15) / 0.85;
+            lipSyncDuration = Math.max(duration || 0, desktopDurationFloor, lipSyncPhones.length * 0.06, 0.5);
+            lipSyncStartTime = Date.now();
+            lipSyncCurrentIndex = -1;
+            lipSyncProgressHint = 0;
+            lipSyncRateScale = 1.0;
+            lastLipAnimTime = Date.now();
+            // Store audio element reference for precise timing sync
+            lipSyncAudioElement = audioElement || null;
+
+            lipAnimator.reset();
+            // Desktop original: trans_dur = audio_duration / num_phonemes.
+            // Floor of 0.08s prevents lip transitions faster than human lips
+            // can physically move (~80-100ms minimum articulation time).
+            lipAnimator.transDur = Math.max(lipSyncDuration / Math.max(lipSyncPhones.length, 1), 0.08);
+            lipAnimator.statDur = 0.001;
+
+            lipSyncActive = true;
+            if (lipSyncFrameId) cancelAnimationFrame(lipSyncFrameId);
+            animateLipSync();
+        }
+
+        function animateLipSync() {
+            if (!lipSyncActive) return;
+
+            const now = Date.now();
+            const dt = Math.min((now - lastLipAnimTime) / 1000, 0.05);
+            lastLipAnimTime = now;
+
+            // Use audio element's currentTime for precise sync when available,
+            // otherwise fall back to wall-clock estimation.
+            let elapsed;
+            if (lipSyncAudioElement && !isNaN(lipSyncAudioElement.currentTime) && lipSyncAudioElement.currentTime > 0) {
+                elapsed = lipSyncAudioElement.currentTime;
+                // Also update duration if audio element has a more accurate value
+                if (!isNaN(lipSyncAudioElement.duration) && lipSyncAudioElement.duration > 0.5) {
+                    lipSyncDuration = lipSyncAudioElement.duration;
+                }
+            } else {
+                elapsed = (now - lipSyncStartTime) / 1000 * lipSyncRateScale;
+            }
+
+            if (elapsed < lipSyncDuration) {
+                const phoneIndex = Math.min(
+                    Math.floor(lipSyncPhones.length * (elapsed / lipSyncDuration)),
+                    lipSyncPhones.length - 1
+                );
+
+                if (phoneIndex !== lipSyncCurrentIndex && phoneIndex >= 0) {
+                    lipSyncCurrentIndex = phoneIndex;
+                    lipAnimator.setPhonemeTarget(lipSyncPhones[phoneIndex]);
+                }
+            } else {
+                // Past estimated duration — smoothly close mouth and stop.
+                lipAnimator.setPhonemeTarget(null);
+                const lipValues = lipAnimator.getValues(dt);
+                applyLipValues(lipValues);
+                // Check if mouth has closed enough to stop
+                let maxVal = 0;
+                LIP_SHAPES.forEach(s => { maxVal = Math.max(maxVal, Math.abs(lipValues[s] || 0)); });
+                if (maxVal < 0.01) {
+                    stopLipSync();
+                }
+                lipSyncFrameId = requestAnimationFrame(animateLipSync);
+                return;
+            }
+
+            const lipValues = lipAnimator.getValues(dt);
+            applyLipValues(lipValues);
+
+            lipSyncFrameId = requestAnimationFrame(animateLipSync);
+        }
+
+        function stopLipSync() {
+            lipSyncActive = false;
+            lipSyncCurrentIndex = -1;
+            lipSyncProgressHint = 0;
+            lipSyncRateScale = 1.0;
+            lipSyncAudioElement = null;
+            if (lipSyncFrameId) {
+                cancelAnimationFrame(lipSyncFrameId);
+                lipSyncFrameId = null;
+            }
+            lipAnimator.reset();
+            resetAllLipTargets();
+        }
+
+        function resetAllLipTargets() {
+            morphMeshes.forEach(mesh => {
+                const dictionary = mesh.morphTargetDictionary;
+                if (!dictionary) return;
+                ensureMorphBuffers(mesh);
+                LIP_SHAPES.forEach(shape => {
+                    const idx = resolveMorphIndex(dictionary, shape);
+                    if (idx >= 0) {
+                        mesh.userData.targetInfluences[idx] = 0;
+                        mesh.userData.currentInfluences[idx] = 0;
+                        mesh.morphTargetInfluences[idx] = 0;
+                    }
+                });
+                const lipCloseIdx = resolveMorphIndex(dictionary, 'lip_close');
+                if (lipCloseIdx >= 0) {
+                    mesh.userData.targetInfluences[lipCloseIdx] = 0;
+                    mesh.userData.currentInfluences[lipCloseIdx] = 0;
+                    mesh.morphTargetInfluences[lipCloseIdx] = 0;
+                }
+            });
+        }
+        // FLUTTER INTERFACE
+        // ============================================
+        window.changeExpression = function(expression) {
+            console.log('Flutter called changeExpression:', expression);
+            return setExpression(expression, 1.0);
+        };
+
+        window.setExpressionIntensity = function(expression, intensity) {
+            console.log('Flutter called setExpressionIntensity:', expression, intensity);
+            return setExpression(expression, intensity);
+        };
+
+        window.speakText = function(text) {
+            const request = parseSpeechRequest(text, arguments.length > 1 ? arguments[1] : null);
+            void speakRequest(0, request);
+            return true;
+        };
+
+        window.speakTextFromFlutter = function(requestId, text, expression, phonemes) {
+            const request = parseSpeechRequest(text, {
+                emotion: expression,
+                phonemes: Array.isArray(phonemes) ? phonemes : null
+            });
+            void speakRequest(Number(requestId) || 0, request);
+            return true;
+        };
+
+        window.stopSpeaking = function() {
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+            clearAzureAudio();
+            currentUtterance = null;
+            isSpeaking = false;
+            stopLipSync();
+            setExpression(restingExpressionName, 1.0, { persist: false });
+            return true;
+        };
+
+        window.stopLipSyncFromFlutter = function() {
+            stopLipSync();
+            setExpression(restingExpressionName, 1.0, { persist: false });
+            return true;
+        };
+
+        window.startLipSyncFromFlutter = function(text, expression, duration, phonemes, intensity) {
+            const speechText = typeof text === 'string' ? text : '';
+            const targetExpression = EXPRESSIONS[expression] ? expression : 'neutral';
+            const speechDuration = Math.max(Number(duration) || 0, 0.8);
+            const providedPhonemes = Array.isArray(phonemes) ? phonemes : null;
+            // During lip sync, use moderate expression intensity so expressions
+            // don't fight with lip morph targets (the original desktop uses per-vertex
+            // variance-weighted blending to separate expression/lip channels).
+            const rawIntensity = (typeof intensity === 'number' && intensity > 0) ? intensity : 1.0;
+            const exprIntensity = Math.min(rawIntensity, 0.7);
+
+            setExpression(targetExpression, exprIntensity, { persist: false, immediate: true });
+            startLipSync(speechText, speechDuration, providedPhonemes);
+            return true;
+        };
+
+        window.startAzureLipSyncFromFlutter = function(visemesJson, expression, intensity) {
+            let visemes = [];
+            try { visemes = JSON.parse(visemesJson); } catch (e) {}
+            
+            const targetExpression = EXPRESSIONS[expression] ? expression : 'neutral';
+            const rawIntensity = (typeof intensity === 'number' && intensity > 0) ? intensity : 1.0;
+            const exprIntensity = Math.min(rawIntensity, 0.7);
+
+            setExpression(targetExpression, exprIntensity, { persist: false, immediate: true });
+            _startAzureLipSync(visemes);
+            return true;
+        };
+
+        window.syncLipProgressFromFlutter = function(progress, start, end, word) {
+            syncLipProgress(Number(progress) || 0);
+            return true;
+        };
+
+        window.finishSpeechFromFlutter = function() {
+            stopLipSync();
+            setTimeout(function() {
+                setExpression(restingExpressionName, 1.0, { persist: false });
+            }, 220);
+            return true;
+        };
+
+        function inferEmotionFromText(text, options) {
+            const modeId = normalizeModeId(options && options.modeId);
+            if (modeId !== null) {
+                const sentimentSignal = computeSentimentSignal(options, text);
+                const fuzzyEmotion = inferEmotionFromDesktopMode(modeId, sentimentSignal);
+                if (fuzzyEmotion) {
+                    return fuzzyEmotion;
+                }
+            }
+
+            const normalized = text.toLowerCase();
+            if (normalized.includes('great') || normalized.includes('excellent') || normalized.includes('awesome') || normalized.includes('👏')) {
+                return 'smile';
+            }
+            if (normalized.includes('sorry') || normalized.includes('try again') || normalized.includes('incorrect')) {
+                return 'sad';
+            }
+            if (normalized.includes('careful') || normalized.includes('warning') || normalized.includes('mistake')) {
+                return 'frown';
+            }
+            if (normalized.includes('wow') || normalized.includes('amazing') || normalized.includes('surprise')) {
+                return 'surprise';
+            }
+            return 'neutral';
+        }
+
+        window.welcomeStudent = function(name) {
+            console.log('Flutter called welcomeStudent:', name);
+            setExpression('smile', 1.0);
+            return true;
+        };
+
+        window.isAvatarReady = function() {
+            return isReady && morphMeshes.length > 0;
+        };
+
+        window.getMorphNames = function() {
+            if (morphMeshes.length > 0 && morphMeshes[0].morphTargetDictionary) {
+                return Object.keys(morphMeshes[0].morphTargetDictionary);
+            }
+            return [];
+        };
+
+        window.AvatarAPI = {
+            setExpression: setExpression,
+            setExpressionImmediate: function(expression) { return setExpression(expression, 1.0); },
+            speakText: window.speakText,
+            stopSpeaking: window.stopSpeaking,
+            getPerformanceProfile: function() { return deviceProfile; },
+            getSpeechProfile: getSpeechProfile,
+            inferEmotionFromDesktopMode: inferEmotionFromDesktopMode,
+            isReady: function() { return isReady && morphMeshes.length > 0; },
+            getMorphNames: function() {
+                if (morphMeshes.length > 0 && morphMeshes[0].morphTargetDictionary) {
+                    return Object.keys(morphMeshes[0].morphTargetDictionary);
+                }
+                return [];
+            }
+        };
+
+        // ============================================
+        // START
+        // ============================================
+        window.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
