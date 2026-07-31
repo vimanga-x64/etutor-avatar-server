@@ -14,22 +14,15 @@ const POLLY_VOICE_ID        = process.env.POLLY_VOICE_ID || 'Joanna';
 const POLLY_AUDIO_FORMAT    = (process.env.POLLY_AUDIO_FORMAT || 'wav').toLowerCase();
 const POLLY_PCM_SAMPLE_RATE = '16000';
 
-// ── Azure TTS (fallback, used only when Polly is not configured) ────────────
-const AZURE_SPEECH_REGION = process.env.AZURE_SPEECH_REGION;
-const AZURE_SPEECH_KEY    = process.env.AZURE_SPEECH_KEY;
-const AZURE_SPEECH_VOICE  = process.env.AZURE_SPEECH_VOICE || 'en-US-JennyNeural';
 
-let azureSpeechToken = null;
-let azureSpeechTokenExpiresAt = 0;
-
-// ── Polly phoneme → Azure-compatible viseme ID ──────────────────────────────
+// ── Polly phoneme to avatar viseme ID ──────────────────────────────
 // Polly viseme speech marks return phoneme strings; the avatar page JS uses
-// Azure numeric IDs 0-21 to drive lip morph targets, so we map them here.
-// Azure viseme ID → lip morph:
+// Numeric IDs 0-21 drive lip morph targets, so we map Polly marks here.
+// Avatar viseme ID to lip morph:
 //   0=silence  1=ah  2=aa  3=oh/ao  4=eh  5=er  6=i  7=w/uw  8=ow
 //   9=aw  10=oy  11=aa/ae  12=r  13=n  14=d_s_t  15=ch_j_sh
 //   16=th  17=f_v  18=d_s_z  19=alveolar-t  20=k  21=b_m_p
-const POLLY_PHONEME_TO_AZURE_VISEME = {
+const POLLY_PHONEME_TO_VISEME_ID = {
   // Silence / pause
   'sil': 0,
   
@@ -171,7 +164,7 @@ async function synthesiseWithPolly(text, ratePercent) {
     .filter(m => m && m.type === 'viseme')
     .map(m => ({
       offset: m.time,  // Polly reports time in ms from audio start
-      id: POLLY_PHONEME_TO_AZURE_VISEME[m.value] ?? 0,
+      id: POLLY_PHONEME_TO_VISEME_ID[m.value] ?? 0,
     }));
 
   return {
@@ -181,47 +174,13 @@ async function synthesiseWithPolly(text, ratePercent) {
   };
 }
 
-async function getAzureSpeechToken() {
-  if (!AZURE_SPEECH_REGION || !AZURE_SPEECH_KEY) {
-    return null;
-  }
-
-  const now = Date.now();
-  if (azureSpeechToken && now < azureSpeechTokenExpiresAt) {
-    return azureSpeechToken;
-  }
-
-  const response = await fetch(
-    `https://${AZURE_SPEECH_REGION}.api.cognitive.microsoft.com/sts/v1.0/issueToken`,
-    {
-      method: 'POST',
-      headers: {
-        'Ocp-Apim-Subscription-Key': AZURE_SPEECH_KEY,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Content-Length': '0',
-      },
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Azure token request failed: ${response.status}`);
-  }
-
-  azureSpeechToken = await response.text();
-  azureSpeechTokenExpiresAt = now + (8 * 60 * 1000);
-  return azureSpeechToken;
-}
-
 // Health check endpoint
 app.get('/health', (req, res) => {
-  const ttsProvider = AWS_ACCESS_KEY_ID ? 'polly'
-    : AZURE_SPEECH_KEY               ? 'azure'
-    : 'none';
+  const ttsProvider = (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) ? 'polly' : 'none';
   res.json({
     status: 'healthy',
     ttsProvider,
     pollyVoice:  AWS_ACCESS_KEY_ID  ? POLLY_VOICE_ID        : null,
-    azureVoice:  AZURE_SPEECH_KEY   ? AZURE_SPEECH_VOICE     : null,
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
   });
@@ -269,34 +228,18 @@ app.get('/avatar/status', (req, res) => {
   });
 });
 
-async function handleTtsConfig(req, res, next) {
-  try {
-    if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
-      res.json({
-        enabled: true,
-        provider: 'polly',
-        region: AWS_REGION,
-        voice: POLLY_VOICE_ID,
-      });
-      return;
-    }
-
-    if (!AZURE_SPEECH_REGION || !AZURE_SPEECH_KEY) {
-      res.json({ enabled: false, provider: 'none' });
-      return;
-    }
-
-    const token = await getAzureSpeechToken();
+function handleTtsConfig(req, res) {
+  if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
     res.json({
       enabled: true,
-      provider: 'azure',
-      region: AZURE_SPEECH_REGION,
-      token,
-      voice: AZURE_SPEECH_VOICE,
+      provider: 'polly',
+      region: AWS_REGION,
+      voice: POLLY_VOICE_ID,
     });
-  } catch (error) {
-    next(error);
+    return;
   }
+
+  res.json({ enabled: false, provider: 'none' });
 }
 
 app.get('/azure-speech/config', handleTtsConfig);
@@ -434,96 +377,39 @@ function smoothWavPcm16Mono(audioBuffer, fadeMs = 36, maxPeak = 0.74) {
   return audioBuffer;
 }
 
-// TTS synthesis — Polly primary, Azure fallback.
-// Keeps the legacy URL (/azure-speech/synthesize) for older mobile clients.
+// TTS synthesis: AWS Polly only. Browser speech remains the client fallback.
+// Keep the legacy URL (/azure-speech/synthesize) for older mobile clients.
 async function handleTtsSynthesize(req, res, next) {
   try {
-    const { text, rate, pitch } = req.body;
+    const { text, rate } = req.body;
     if (!text) {
       return res.status(400).json({ error: 'Missing text parameter' });
     }
 
     cleanupTempAudio();
-
-    // ── Path 1: Amazon Polly ───────────────────────────────────────────────
-    if (AWS_ACCESS_KEY_ID && AWS_SECRET_ACCESS_KEY) {
-      try {
-        const { audioBuffer, audioExt, visemes } = await synthesiseWithPolly(text, rate);
-
-        const audioId = crypto.randomUUID();
-        const audioFileName = `${audioId}.${audioExt}`;
-        fs.writeFileSync(path.join(tempAudioDir, audioFileName), audioBuffer);
-
-        console.log(`[Polly] Synthesised "${text.slice(0, 40)}..." — ${visemes.length} visemes`);
-        return res.json({
-          audioUrl: `/temp-audio/${audioFileName}`,
-          visemes,
-          format: audioExt === 'mp3' ? 'audio/mpeg' : 'audio/wav',
-          provider: 'polly',
-          voice: POLLY_VOICE_ID,
-          durationMs: estimateDurationMs(text, visemes),
-        });
-      } catch (pollyErr) {
-        console.error('[Polly] synthesis failed, trying Azure fallback:', pollyErr.message);
-        // Fall through to Azure below.
-      }
-    }
-
-    // ── Path 2: Azure Neural TTS (fallback) ───────────────────────────────
-    if (!AZURE_SPEECH_REGION || !AZURE_SPEECH_KEY) {
+    if (!AWS_ACCESS_KEY_ID || !AWS_SECRET_ACCESS_KEY) {
       return res.status(503).json({
-        error: 'No TTS provider configured',
-        hint: 'Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (Polly) or AZURE_SPEECH_KEY + AZURE_SPEECH_REGION',
+        error: 'AWS Polly is not configured',
+        hint: 'Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY for Polly. Browser speech is the client fallback.',
       });
     }
 
-    const sdk = require('microsoft-cognitiveservices-speech-sdk');
-    const speechConfig = sdk.SpeechConfig.fromSubscription(AZURE_SPEECH_KEY, AZURE_SPEECH_REGION);
-    speechConfig.speechSynthesisVoiceName = AZURE_SPEECH_VOICE;
-    speechConfig.speechSynthesisOutputFormat =
-      sdk.SpeechSynthesisOutputFormat.Riff48Khz16BitMonoPcm;
+    const { audioBuffer, audioExt, visemes } = await synthesiseWithPolly(text, rate);
+    const audioId = crypto.randomUUID();
+    const audioFileName = `${audioId}.${audioExt}`;
+    fs.writeFileSync(path.join(tempAudioDir, audioFileName), audioBuffer);
 
-    const synthesizer = new sdk.SpeechSynthesizer(speechConfig, null);
-    const visemes = [];
-    synthesizer.visemeReceived = (_sender, event) => {
-      const offsetMs = Math.round(Number(event.audioOffset) / 10000);
-      visemes.push({ offset: offsetMs, id: event.visemeId });
-    };
-
-    const ratePercent  = Number(rate)  || 0;
-    const pitchPercent = Number(pitch) || 0;
-    const escapedText  = String(text)
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-    const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US"><voice name="${AZURE_SPEECH_VOICE}"><break time="400ms"/><prosody rate="${ratePercent >= 0 ? '+' : ''}${ratePercent}%" pitch="${pitchPercent >= 0 ? '+' : ''}${pitchPercent}%">${escapedText}</prosody></voice></speak>`;
-
-    const result = await new Promise((resolve, reject) => {
-      synthesizer.speakSsmlAsync(ssml,
-        r => { synthesizer.close(); resolve(r); },
-        e => { synthesizer.close(); reject(new Error(e)); },
-      );
+    console.log(`[Polly] Synthesised "${text.slice(0, 40)}..." - ${visemes.length} visemes`);
+    return res.json({
+      audioUrl: `/temp-audio/${audioFileName}`,
+      visemes,
+      format: audioExt === 'mp3' ? 'audio/mpeg' : 'audio/wav',
+      provider: 'polly',
+      voice: POLLY_VOICE_ID,
+      durationMs: estimateDurationMs(text, visemes),
     });
-
-    if (result.reason === sdk.ResultReason.SynthesizingAudioCompleted) {
-      const audioId = crypto.randomUUID();
-      const audioFileName = `${audioId}.wav`;
-      fs.writeFileSync(path.join(tempAudioDir, audioFileName), Buffer.from(result.audioData));
-
-      console.log(`[Azure] Synthesised "${text.slice(0, 40)}..." — ${visemes.length} visemes`);
-      return res.json({
-        audioUrl: `/temp-audio/${audioFileName}`,
-        visemes,
-        format: 'audio/wav',
-        provider: 'azure',
-        voice: AZURE_SPEECH_VOICE,
-        durationMs: estimateDurationMs(text, visemes),
-      });
-    } else {
-      const details = sdk.CancellationDetails.fromResult(result);
-      console.error('[Azure] synthesis cancelled:', details.reason, details.errorDetails);
-      return res.status(502).json({ error: 'Azure synthesis failed', details: details.errorDetails });
-    }
   } catch (error) {
+    console.error('[Polly] synthesis failed:', error.message);
     next(error);
   }
 }
@@ -549,7 +435,7 @@ app.get('/', (req, res) => {
       avatar: '/avatar',
       ttsConfig: '/tts/config',
       ttsSynthesize: 'POST /tts/synthesize',
-      legacyAzureSpeechConfig: '/azure-speech/config',
+      legacyCloudSpeechConfig: '/azure-speech/config',
       speak: 'POST /avatar/speak',
       expression: 'POST /avatar/expression',
       status: '/avatar/status'
