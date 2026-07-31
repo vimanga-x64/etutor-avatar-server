@@ -2283,9 +2283,12 @@
             const exprIntensity = Math.min(rawIntensity, 0.7);
 
             setExpression(targetExpression, exprIntensity, { persist: false, immediate: true });
-            _startPollyLipSync(visemes, audio);
+            _startPollyLipSync(visemes);
             return true;
         };
+
+        window.startAzureLipSyncFromFlutter = window.startPollyLipSyncFromFlutter;
+        window.startCloudLipSyncFromFlutter = window.startPollyLipSyncFromFlutter;
 
         window.syncLipProgressFromFlutter = function(progress, start, end, word) {
             syncLipProgress(Number(progress) || 0);
