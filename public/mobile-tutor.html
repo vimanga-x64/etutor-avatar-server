@@ -304,6 +304,31 @@
             funny_smile: 1.0,
             depress: 1.0
         };
+        const SPEECH_EXPRESSION_INTENSITY_CAP = {
+            neutral: 0.58,
+            normal: 0.58,
+            smile: 0.58,
+            happy: 0.58,
+            laugh: 0.54,
+            closed_smile: 0.56,
+            funny_smile: 0.54,
+            sad: 0.42,
+            sadness: 0.42,
+            frown: 0.40,
+            depress: 0.38,
+            anger: 0.44,
+            angry: 0.44,
+            disgust: 0.42,
+            fear: 0.46,
+            surprise: 0.54
+        };
+
+        function expressionIntensityForSpeech(expressionName, requestedIntensity) {
+            const normalized = String(expressionName || 'neutral').toLowerCase();
+            const requested = Math.max(0, Number(requestedIntensity) || 0);
+            const cap = SPEECH_EXPRESSION_INTENSITY_CAP[normalized] ?? 0.52;
+            return Math.min(requested, cap);
+        }
 
         const EMOTION_SPEECH_PROFILES = {
             neutral: { rate: 0.8, pitch: 1.0, volume: 1.0, expressionIntensity: 0.92 },
@@ -736,7 +761,7 @@
                 }
 
                 isSpeaking = true;
-                setExpression(expression, Math.min(1.32, speechProfile.expressionIntensity + 0.18), { persist: false, immediate: true });
+                setExpression(expression, expressionIntensityForSpeech(expression, speechProfile.expressionIntensity + 0.18), { persist: false, immediate: true });
 
                 // ── Play via HTML Audio element with direct server URL ──
                 // This is the ONLY audio path.  The Audio element feeds the WAV
@@ -1110,7 +1135,7 @@
                     isSpeaking = false;
                 }
 
-                setExpression(expression, Math.min(1.22, speechProfile.expressionIntensity + 0.08), { persist: false });
+                setExpression(expression, expressionIntensityForSpeech(expression, speechProfile.expressionIntensity + 0.08), { persist: false });
 
                 const utterance = new SpeechSynthesisUtterance(speechText);
                 utterance.rate = speechProfile.rate;
@@ -1121,7 +1146,7 @@
 
                 utterance.onstart = function() {
                     isSpeaking = true;
-                    setExpression(expression, Math.min(1.16, speechProfile.expressionIntensity + 0.08), { persist: false });
+                    setExpression(expression, expressionIntensityForSpeech(expression, speechProfile.expressionIntensity + 0.08), { persist: false });
                     startLipSync(speechText, speechDuration, request.phonemes);
                 };
 
@@ -2267,7 +2292,7 @@
             // don't fight with lip morph targets (the original desktop uses per-vertex
             // variance-weighted blending to separate expression/lip channels).
             const rawIntensity = (typeof intensity === 'number' && intensity > 0) ? intensity : 1.0;
-            const exprIntensity = Math.min(rawIntensity, 0.7);
+            const exprIntensity = expressionIntensityForSpeech(targetExpression, rawIntensity);
 
             setExpression(targetExpression, exprIntensity, { persist: false, immediate: true });
             startLipSync(speechText, speechDuration, providedPhonemes);
@@ -2280,7 +2305,7 @@
             
             const targetExpression = EXPRESSIONS[expression] ? expression : 'neutral';
             const rawIntensity = (typeof intensity === 'number' && intensity > 0) ? intensity : 1.0;
-            const exprIntensity = Math.min(rawIntensity, 0.7);
+            const exprIntensity = expressionIntensityForSpeech(targetExpression, rawIntensity);
 
             setExpression(targetExpression, exprIntensity, { persist: false, immediate: true });
             _startPollyLipSync(visemes);
