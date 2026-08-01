@@ -1012,8 +1012,9 @@
         let _pollyVisemeIndex = -1;
         let _pollyExternalElapsedMs = 0;
         let _pollyExternalElapsedAt = 0;
+        let _pollySmoothedElapsedMs = 0;
         const POLLY_VISEME_LEAD_MS = 35;
-        const POLLY_EXTERNAL_CLOCK_STALE_MS = 180;
+        const POLLY_EXTERNAL_CLOCK_STALE_MS = 260;
 
         function _startPollyLipSync(visemes, audioElement) {
             lipSyncActive = true;
@@ -1029,6 +1030,7 @@
             lipSyncAudioElement = audioElement || null;
             _pollyExternalElapsedMs = 0;
             _pollyExternalElapsedAt = 0;
+            _pollySmoothedElapsedMs = 0;
             
             lipAnimator.reset();
             lipAnimator.statDur = 0.001;
@@ -1038,13 +1040,26 @@
 
         function getPollyVisemeElapsedMs() {
             const audio = lipSyncAudioElement;
+            let elapsedMs;
             if (audio && !audio.paused && Number.isFinite(audio.currentTime)) {
-                return Math.max(0, Math.round((audio.currentTime * 1000) + POLLY_VISEME_LEAD_MS));
+                elapsedMs = audio.currentTime * 1000;
+            } else {
+                const now = performance.now();
+                const externalClockAge = _pollyExternalElapsedAt > 0
+                    ? now - _pollyExternalElapsedAt
+                    : Number.POSITIVE_INFINITY;
+                if (_pollyExternalElapsedAt > 0 && externalClockAge < POLLY_EXTERNAL_CLOCK_STALE_MS) {
+                    elapsedMs = _pollyExternalElapsedMs + Math.max(0, externalClockAge);
+                } else {
+                    elapsedMs = Date.now() - lipSyncStartTime;
+                }
             }
-            if (_pollyExternalElapsedAt > 0 && performance.now() - _pollyExternalElapsedAt < POLLY_EXTERNAL_CLOCK_STALE_MS) {
-                return Math.max(0, Math.round(_pollyExternalElapsedMs + POLLY_VISEME_LEAD_MS));
-            }
-            return Math.max(0, Date.now() - lipSyncStartTime);
+
+            _pollySmoothedElapsedMs = Math.max(
+                _pollySmoothedElapsedMs,
+                Math.max(0, elapsedMs)
+            );
+            return Math.max(0, Math.round(_pollySmoothedElapsedMs + POLLY_VISEME_LEAD_MS));
         }
 
         function animatePollyLipSync() {
@@ -2244,6 +2259,7 @@
             lipSyncAudioElement = null;
             _pollyExternalElapsedMs = 0;
             _pollyExternalElapsedAt = 0;
+            _pollySmoothedElapsedMs = 0;
             if (lipSyncFrameId) {
                 cancelAnimationFrame(lipSyncFrameId);
                 lipSyncFrameId = null;
@@ -2353,7 +2369,7 @@
         window.syncPollyLipProgressFromFlutter = function(elapsedMs) {
             const elapsed = Number(elapsedMs);
             if (!Number.isFinite(elapsed) || elapsed < 0) return false;
-            _pollyExternalElapsedMs = elapsed;
+            _pollyExternalElapsedMs = Math.max(elapsed, _pollySmoothedElapsedMs - 45);
             _pollyExternalElapsedAt = performance.now();
             return true;
         };
