@@ -264,22 +264,41 @@
         ]);
 
         const LIP_SHAPE_STRENGTH = {
-            b_m_p: 0.92,
-            big_aah: 1.12,
+            b_m_p: 0.94,
+            big_aah: 1.08,
             ch_j_sh: 0.86,
-            d_s_t: 0.84,
-            ee: 0.9,
-            eh: 0.98,
-            f_v: 0.82,
+            d_s_t: 0.82,
+            ee: 0.92,
+            eh: 0.96,
+            f_v: 0.84,
             i: 0.94,
-            k: 0.82,
-            n: 0.8,
-            oh: 1.02,
-            ooh_q: 0.96,
-            r: 0.88,
-            small_aah: 1.0,
+            k: 0.78,
+            n: 0.78,
+            oh: 0.98,
+            ooh_q: 0.94,
+            r: 0.86,
+            small_aah: 0.98,
             th: 0.78,
-            w: 0.8
+            w: 0.84
+        };
+
+        const LIP_SHAPE_PROFILE = {
+            b_m_p: { b_m_p: 1.0 },
+            big_aah: { big_aah: 1.0, small_aah: 0.18 },
+            ch_j_sh: { ch_j_sh: 1.0, w: 0.16, d_s_t: 0.10 },
+            d_s_t: { d_s_t: 1.0, ee: 0.16 },
+            ee: { ee: 1.0, i: 0.12 },
+            eh: { eh: 1.0, small_aah: 0.12 },
+            f_v: { f_v: 1.0, b_m_p: 0.12 },
+            i: { i: 1.0, ee: 0.14 },
+            k: { k: 1.0, eh: 0.10 },
+            n: { n: 1.0, d_s_t: 0.10 },
+            oh: { oh: 1.0, ooh_q: 0.12 },
+            ooh_q: { ooh_q: 1.0, w: 0.22 },
+            r: { r: 1.0, ooh_q: 0.10 },
+            small_aah: { small_aah: 1.0, eh: 0.10 },
+            th: { th: 1.0, d_s_t: 0.12 },
+            w: { w: 1.0, ooh_q: 0.20 }
         };
 
         // Resting pose: all lip morphs at zero so the mouth sits naturally
@@ -991,7 +1010,10 @@
         // ── Shared: start Polly viseme lip-sync animation ──
         let _pollyVisemes = [];
         let _pollyVisemeIndex = -1;
+        let _pollyExternalElapsedMs = 0;
+        let _pollyExternalElapsedAt = 0;
         const POLLY_VISEME_LEAD_MS = 35;
+        const POLLY_EXTERNAL_CLOCK_STALE_MS = 180;
 
         function _startPollyLipSync(visemes, audioElement) {
             lipSyncActive = true;
@@ -1005,6 +1027,8 @@
             lipSyncStartTime = Date.now();
             lastLipAnimTime = Date.now();
             lipSyncAudioElement = audioElement || null;
+            _pollyExternalElapsedMs = 0;
+            _pollyExternalElapsedAt = 0;
             
             lipAnimator.reset();
             lipAnimator.statDur = 0.001;
@@ -1016,6 +1040,9 @@
             const audio = lipSyncAudioElement;
             if (audio && !audio.paused && Number.isFinite(audio.currentTime)) {
                 return Math.max(0, Math.round((audio.currentTime * 1000) + POLLY_VISEME_LEAD_MS));
+            }
+            if (_pollyExternalElapsedAt > 0 && performance.now() - _pollyExternalElapsedAt < POLLY_EXTERNAL_CLOCK_STALE_MS) {
+                return Math.max(0, Math.round(_pollyExternalElapsedMs + POLLY_VISEME_LEAD_MS));
             }
             return Math.max(0, Date.now() - lipSyncStartTime);
         }
@@ -2027,19 +2054,25 @@
                 LIP_SHAPES.forEach(s => {
                     this.curr[s] = this.getInterpolatedValue(s);
                 });
-                // New target: zero all, set active phoneme
+                // New target: zero all, then blend a small viseme profile.
+                // Real speech usually shows a main mouth pose plus a little
+                // co-articulation from nearby lip/jaw shapes.
                 LIP_SHAPES.forEach(s => { this.target[s] = 0; });
-                if (shapeName && LIP_SHAPE_STRENGTH[shapeName] !== undefined) {
-                    this.target[shapeName] = BASE_LIP_INTENSITY * LIP_SHAPE_STRENGTH[shapeName];
+                const profile = shapeName ? (LIP_SHAPE_PROFILE[shapeName] || { [shapeName]: 1.0 }) : null;
+                if (profile) {
+                    Object.entries(profile).forEach(([shape, weight]) => {
+                        if (LIP_SHAPE_STRENGTH[shape] !== undefined) {
+                            this.target[shape] = BASE_LIP_INTENSITY * LIP_SHAPE_STRENGTH[shape] * weight;
+                        }
+                    });
                 }
                 
-                // Fix for abrupt jaw drops: ensure jaw opening takes longer
                 this.actualTransDur = this.transDur;
-                if (shapeName && ['big_aah', 'small_aah', 'oh', 'eh'].includes(shapeName)) {
-                    // Force jaw drops to take at least 120ms to prevent snapping
-                    this.actualTransDur = Math.max(this.transDur * 1.5, 0.12);
-                }
-                
+                if (shapeName && OPEN_LIP_SHAPES.has(shapeName)) {
+                    this.actualTransDur = Math.max(Math.min(this.transDur * 1.12, 0.09), 0.055);
+                } else if (shapeName && CLOSED_LIP_SHAPES.has(shapeName)) {
+                    this.actualTransDur = Math.max(Math.min(this.transDur * 0.85, 0.065), 0.035);
+                }                
                 this.state = 'trans';
                 this.cycleTime = 0;
             },
@@ -2209,6 +2242,8 @@
             lipSyncProgressHint = 0;
             lipSyncRateScale = 1.0;
             lipSyncAudioElement = null;
+            _pollyExternalElapsedMs = 0;
+            _pollyExternalElapsedAt = 0;
             if (lipSyncFrameId) {
                 cancelAnimationFrame(lipSyncFrameId);
                 lipSyncFrameId = null;
@@ -2314,6 +2349,16 @@
 
         window.startAzureLipSyncFromFlutter = window.startPollyLipSyncFromFlutter;
         window.startCloudLipSyncFromFlutter = window.startPollyLipSyncFromFlutter;
+
+        window.syncPollyLipProgressFromFlutter = function(elapsedMs) {
+            const elapsed = Number(elapsedMs);
+            if (!Number.isFinite(elapsed) || elapsed < 0) return false;
+            _pollyExternalElapsedMs = elapsed;
+            _pollyExternalElapsedAt = performance.now();
+            return true;
+        };
+
+        window.syncCloudLipProgressFromFlutter = window.syncPollyLipProgressFromFlutter;
 
         window.syncLipProgressFromFlutter = function(progress, start, end, word) {
             syncLipProgress(Number(progress) || 0);
